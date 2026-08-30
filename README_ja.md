@@ -35,7 +35,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 ## 📖 目次
 
 - [🗞️ ニュース](#ニュース)
-- [🏗️ アーキテクチャ基盤](#アーキテクチャ基盤ray--vllm分散) - Ray + vLLM + DeepSpeed分散インフラ
+- [🏗️ アーキテクチャ基盤](#アーキテクチャ基盤ray--vllm分散) - Ray + vLLM + FSDP2分散インフラ
 - [🎯 設計パラダイム](#設計パラダイムエージェントベースの実行) - 統一エージェント実行パイプライン
 - [🚀 RLアルゴリズム](#最先端のrlアルゴリズム) - PPO、REINFORCE++、GRPO、RLOO
 - [📋 機能概要](#包括的な機能) - 完全なRLHFパイプライン機能
@@ -43,7 +43,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 - [🎓 学習ガイド](#教師あり微調整) - SFT、報酬モデル、RL学習
 - [🎯 シングルターンエージェント](#シングルターンエージェントカスタム報酬による強化微調整) - カスタム報酬関数
 - [🤖 マルチターンエージェント](#マルチターンエージェント複雑な環境相互作用) - 複雑な環境
-- [🔧 高度なトピック](#高度なトピック) - LoRA、パフォーマンスチューニング
+- [🔧 高度なトピック](#高度なトピック) - パフォーマンスチューニング
 
 ---
 
@@ -57,7 +57,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 - [2025/10] [ScaleRL](https://arxiv.org/abs/2510.13786) が大規模学習シナリオにおけるREINFORCE++-baselineの有効性を検証。[REINFORCE++スライド](https://docs.google.com/presentation/d/1stieP_3PM1z4Hq1YWR3GywFkxcHEAlstXMaS23KlGN4)をリリース
 - [2025/6] [Magistral](https://mistral.ai/static/research/magistral.pdf) がREINFORCE++-baselineと非常に類似した手法を用いて推論モデルを学習。
 - [2025/5] [MARTI](https://github.com/TsinghuaC3I/MARTI) がOpenRLHFのフォークとしてリリース。集中型マルチエージェント相互作用と分散ポリシー学習を統合することで、LLMベースのマルチエージェントシステムをRLで学習することを目的としています。
-- [2025/5] OpenRLHF 0.8.0は `--train.async_enable` による非同期RLHF学習と、`--train.agent_func_path` による非同期エージェントRLHFをサポートし、クラスベースのエージェントAPIを再設計。実行可能な例は [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) を参照してください。
+- [2025/5] OpenRLHF 0.8.0は `--async_train` による非同期RLHF学習と、`--agent_func_path` による非同期エージェントRLHFをサポートし、クラスベースのエージェントAPIを再設計。実行可能な例は [train_reinforce_baseline_ray_agent_async.sh](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh) を参照してください。
 - [2025/4] ブログ記事 [Accelerating RLHF with vLLM, Best Practice from OpenRLHF](https://blog.vllm.ai/2025/04/23/openrlhf-vllm.html) を公開
 - [2025/4] Clean OpenRLHF：単一コントローラと統一パッキングサンプルに基づいてソースコードをリファクタリング
 - [2025/3] CMUの[Advanced Natural Language Processing Spring 2025](https://cmu-l3.github.io/anlp-spring2025/)コースでOpenRLHFがRLHFフレームワーク教材として採用されました。
@@ -92,8 +92,8 @@ OpenRLHFは[Ray](https://github.com/ray-project/ray)を活用して効率的な�
 **vLLM - 高性能推論エンジン**  
 RLHF学習では**時間の80%**がサンプル生成に費やされます。自動テンソル並列化（AutoTP）とパイプライン並列化（PP）を備えた[vLLM](https://github.com/vllm-project/vllm)により、OpenRLHFは高スループットでメモリ効率的な生成を提供します。
 
-**DeepSpeed - メモリ効率的な学習**  
-[DeepSpeed](https://github.com/deepspeedai/DeepSpeed) ZeRO-3、[deepcompile](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/deepcompile/README.md)、[AutoTP](https://github.com/deepspeedai/DeepSpeed/blob/master/blogs/huggingface-tp/README.md)、RingAttentionをベースに構築されています。重量級フレームワークなしで大規模モデルの学習を可能にし、HuggingFaceモデルと直接連携します。
+**FSDP2 - メモリ効率的な学習**  
+PyTorch FSDP2（合成可能な `fully_shard`）、DTensorベースのテンソル並列、RingAttention（コンテキスト並列）をベースに構築されています。混合精度、（オプションの）CPU offload、分散チェックポイントをサポートし、HuggingFaceモデルと直接連携します。
 
 **Transformers - モデルインターフェース**  
 HuggingFace Transformersとのネイティブ統合により、シームレスなモデル読み込み、状態管理、事前学習済みモデルのファインチューニングを実現します。
@@ -178,7 +178,7 @@ OpenRLHFは、実践ガイドとコミュニティのベストプラクティス
 <details>
 <summary>アルゴリズム比較表を表示</summary>
 
-| アルゴリズム | `--algo.advantage.estimator` | 主な特徴 | 最適なユースケース |
+| アルゴリズム | `--advantage_estimator` | 主な特徴 | 最適なユースケース |
 |------------|------------------------|---------|------------------|
 | **PPO** | (デフォルト) | 完全なcriticネットワーク | 安定した学習、実証済みの結果 |
 | **REINFORCE++** | `reinforce` | criticなしのPPOトリック | 効率的な学習、少ないメモリ |
@@ -210,15 +210,15 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 **シングルターンモード**（デフォルト - 99%のユースケース）
 - プロンプトごとに1回の生成
 - すべてのRLアルゴリズムで動作：[PPO](./examples/scripts/train_ppo_ray_hybrid_engine.sh)、[REINFORCE++/baseline/GRPO/RLOO](./examples/scripts/train_reinforce_baseline_hybrid_engine.sh)
-- [カスタム報酬関数](./examples/scripts/train_ppo_with_reward_fn.sh)（`--reward.remote_url`）
+- [カスタム報酬関数](./examples/scripts/train_ppo_with_reward_fn.sh)（`--remote_rm_url`）
 - GPU使用率を最大化する[ハイブリッドエンジン](./examples/scripts/train_ppo_ray_hybrid_engine.sh)
 
 **マルチターンモード**（高度 - インタラクティブタスク）
 - 環境フィードバックとのマルチステップ相互作用
 - すべてのRLアルゴリズムで動作
-- [カスタムエージェント関数](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--train.agent_func_path`）
+- [カスタムエージェント関数](./examples/scripts/train_reinforce_baseline_ray_agent_async.sh)（`--agent_func_path`）
 - OpenAI互換サーバー：vLLMをローカルOpenAIサーバーとしてラップするagent executorの例として `examples/python/agent_func_openai_server_executor.py` を参照
-- スループット向上のための[非同期パイプライン](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--train.async_enable`）
+- スループット向上のための[非同期パイプライン](./examples/test_scripts/train_reinforce_llama_ray_async.sh)（`--async_train`）
 
 </details>
 
@@ -242,35 +242,30 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 <summary>高度な機能を表示</summary>
 
 **効率の最適化**
-- すべての学習モードでのサンプルパッキング（`--ds.packing_samples`）
-- 高速生成のためのvLLM加速（`--vllm.num_engines`）
-- TIS（vLLM 重要度サンプリング補正）/ ICEPOP：`--algo.advantage.is_correction_enable`、`--algo.advantage.is_correction_threshold 0.5 5.0`、`--use_icepop`（PPO のみ）
-- DAPO [動的フィルタリング](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--algo.dynamic_filtering_enable`）
+- すべての学習モードでのサンプルパッキング（`--packing_samples`）
+- 高速生成のためのvLLM加速（`--vllm_num_engines`）
+- TIS（vLLM 重要度サンプリング補正）/ ICEPOP：`--enable_vllm_is_correction`、`--vllm_is_truncated_threshold 0.5 5.0`、`--use_icepop`（PPO のみ）
+- DAPO [動的フィルタリング](./examples/scripts/train_dapo_ray_hybrid_engine.sh)（`--dynamic_filtering`）
   - 🎲 Dynamic Sampling：各プロンプトに対して複数の応答を生成し、報酬関数/エージェントが返す **0–1 `scores`** に基づいてフィルタリング
-    - 有効化：`--algo.dynamic_filtering_enable`
-    - スコア範囲：`--algo.dynamic_filtering_range 0.0 1.0`
-    - 要件：`--rollout.n_samples_per_prompt > 1`、かつ `--reward.remote_url`（報酬関数）または `--train.agent_func_path`（エージェント）を指定
+    - 有効化：`--dynamic_filtering`
+    - スコア範囲：`--dynamic_filtering_reward_range 0.0 1.0`
+    - 要件：`--n_samples_per_prompt > 1`、かつ `--remote_rm_url`（報酬関数）または `--agent_func_path`（エージェント）を指定
     - 例：`./examples/scripts/train_dapo_ray_hybrid_engine.sh`
 
 **スケーラビリティ**
-- DeepSpeed AutoTP（テンソル並列化）は、学習スクリプト内の `--ds.tensor_parallel_size` を参照
-- 長文脈のための[RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--ds.ring_attn_size`）
+- FSDP2 テンソル並列は、学習スクリプト内の `--fsdp2_tp_size` を参照
+- 長文脈のための[RingAttention](./examples/test_scripts/train_dpo_ring_llama.sh)（`--fsdp2_cp_size`）
 - [SLURM](./examples/scripts/train_ppo_ray_slurm.sh)を使用したマルチノード学習
 
 **モデルサポート**
-- [LoRA/QLoRA](./examples/scripts/train_sft_mixtral_lora.sh)（`--ds.lora.rank`、`--ds.load_in_4bit`）
-- [専門家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--actor.aux_loss_coef`）
-- FlashAttention（`--ds.attn_implementation`）
-- HuggingFaceチャットテンプレート（`--data.apply_chat_template`）
-
-**オプティマイザ**
-- AdamW（デフォルト）：`--{actor,critic}.optim adam --{actor,critic}.adam.lr 2e-6`
-- [Muon](https://kellerjordan.github.io/posts/muon/)（DeepSpeed ≥ 0.18.2 が必要、2D 重みのみ対象；embedding / head / 1D パラメータは補助 AdamW 経路）：`--{actor,critic}.optim muon --{actor,critic}.muon.lr 1e-4 --{actor,critic}.muon.momentum 0.95`。Newton-Schulz 出力はスケール不変なので、`--{actor,critic}.max_norm 0` でグローバル勾配クリップを無効化してください（Adam のデフォルト `1.0` だと Muon の更新が消えてしまいます）。
+- [専門家混合（MoE）](./examples/test_scripts/train_sft_moe.sh)（`--aux_loss_coef`）
+- FlashAttention（`--attn_implementation`）
+- HuggingFaceチャットテンプレート（`--apply_chat_template`）
 
 **本番環境機能**
-- Wandb（`--logger.wandb.key`）とTensorBoard（`--logger.tensorboard_dir`）ロギング
-- チェックポイント復旧（`--ckpt.load_enable`、`--ckpt.save_steps`）
-- 評価データセット（`--eval.dataset`）
+- Wandb（`--use_wandb`）とTensorBoard（`--use_tensorboard`）ロギング
+- チェックポイント復旧（`--dcp_checkpoint_from_path`、`--resume_training`、`--ckpt_save_path`、`--save_steps`。定期checkpointには `--save_steps > 0`。`--dcp_checkpoint_from_path` は `/path/to/ckpt/dcp_ckpt/global_step_100` のような明示的な step ディレクトリを指定。`--resume_training` を追加すると optimizer/scheduler の状態も復元）
+- 評価データセット（`--eval_dataset`）
 
 </details>
 
@@ -286,14 +281,14 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 ```bash
 # 1. Dockerコンテナを起動
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:26.03-py3 bash
+  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:25.11-py3 bash
 
 # 2. 競合するパッケージをクリーンアップ
 sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
 
 # 3. OpenRLHFをインストール（1つ選択）
 pip install openrlhf                    # 基本
-pip install openrlhf[vllm]              # + vLLM 0.27.1（推奨）
+pip install openrlhf[vllm]              # + vLLM 0.18.0（推奨）
 pip install openrlhf[vllm_latest]       # + 最新vLLM
 pip install openrlhf[vllm,ring,liger]   # + すべての最適化
 ```
@@ -307,7 +302,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> 最高のパフォーマンスのために**vLLM 0.27.1+**を推奨します。[Dockerfiles](./dockerfile/)と[Nvidia-Dockerインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)を参照してください。
+> 最高のパフォーマンスのために**vLLM 0.18.0+**を推奨します。[Dockerfiles](./dockerfile/)と[Nvidia-Dockerインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)を参照してください。
 
 詳細な使用方法、データセット準備、学習例については、英語版READMEの該当セクションを参照してください。
 
@@ -333,19 +328,6 @@ pip install -e .
 
 <a id="高度なトピック"></a>
 ## 🔧 高度なトピック
-
-### LoRA：アダプターのマージ
-
-LoRA/QLoRAを使用する場合、OpenRLHFはアダプターの重みのみを保存します。デプロイまたは学習を続けるには、アダプターをベースモデルとマージします：
-
-```bash
-python -m openrlhf.cli.lora_combiner \
-    --model_path meta-llama/Meta-Llama-3-8B \
-    --lora_path ./checkpoint/llama3-8b-rm \
-    --output_path ./checkpoint/llama-3-8b-rm-combined \
-    --is_rm \
-    --ds.param_dtype bf16
-```
 
 ### パフォーマンスチューニングガイド
 
@@ -411,6 +393,7 @@ AIとNLP分野への貢献に対して、以下のプロジェクトと組織に
 - [OpenAI GPT ↗](https://github.com/openai/gpt-3)
 - [LLaMA ↗](https://llama.meta.com/)
 - [DeepSpeed ↗](https://github.com/microsoft/DeepSpeed)
+- [PyTorch ↗](https://github.com/pytorch/pytorch)
 - [Ray ↗](https://github.com/ray-project/ray)
 
 私たちのプロジェクトは[ColossalChat](https://github.com/hpcaitech/ColossalAI/tree/main/applications/ColossalChat)と[DeepSpeedChat](https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)にも感謝します。プロジェクトの初期段階で、彼らのコード設計を参考にしました。ring attentionの開発のためのGPUサポートを提供してくれた[Netmind.AI](https://www.netmind.ai/)に感謝します。
@@ -431,14 +414,14 @@ OpenRLHF
 
 REINFORCE++-baseline
 ```
-@article{hu2026reinforce++,
+@article{hu2025reinforce++,
   title{Reinforce++: A simple and efficient approach for aligning large language models},
   author={Hu, Jian},
   journal={arXiv preprint arXiv:2501.03262},
-  year={2026}
+  year={2025}
 }
 ```
 
 ______________________________________________________________________
 
-*OpenRLHF © 2026 OpenRLHF. All Rights Reserved.*
+*OpenRLHF © 2025 OpenRLHF. All Rights Reserved.*

@@ -1,1 +1,1 @@
-# No implicit imports of deepspeed here to avoid vllm environment gets comtaminated
+# Avoid heavy/side-effect imports here to keep vLLM/Ray workers clean.

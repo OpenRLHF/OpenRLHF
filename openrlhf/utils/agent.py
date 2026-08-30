@@ -11,7 +11,17 @@ logger = init_logger(__name__)
 
 class AgentExecutorBase(ABC):
     @abstractmethod
-    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine, images=None):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        llm_engine,
+        *,
+        max_tool_response_length=None,
+    ):
         raise NotImplementedError("AgentExecutorBase.execute is not implemented")
 
 
@@ -33,45 +43,39 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         assert issubclass(agent_instance_cls, AgentInstanceBase), "AgentInstance must inherit from AgentInstanceBase"
         self.agent_instance_cls = agent_instance_cls
 
-    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine, images=None):
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        llm_engine,
+        *,
+        max_tool_response_length=None,
+    ):
         # Treat each AgentInstance as an isolated environment; bind every prompt to its own independent instance
         agent_instance = self.agent_instance_cls()
+        sampling_params = deepcopy(sampling_params)
 
         # Initialize with reset function
         initial_states = {"observation": prompt, "label": label}
         reset_result = await agent_instance.reset(initial_states)
         observation_text = reset_result["observation"]
 
-        # Tokenize the initial observation — for VLM the processor inserts
-        # image placeholder tokens and returns pixel tensors for training.
-        pil_images = []
-        mm_train_inputs = None
-        if images and hasattr(hf_tokenizer, "image_processor"):
-            from openrlhf.utils.vlm_utils import process_prompt_with_images
-
-            current_obs_tokens, mm_train_inputs, pil_images = process_prompt_with_images(
-                hf_tokenizer, observation_text, images
-            )
-        else:
-            current_obs_tokens = hf_tokenizer(text=observation_text, add_special_tokens=False, return_tensors="pt")[
-                "input_ids"
-            ][0].tolist()
+        # Tokenize the initial observation
+        current_obs_tokens = hf_tokenizer(observation_text, add_special_tokens=False, return_tensors="pt")[
+            "input_ids"
+        ][0].tolist()
 
         # Truncate initial observation if it's too long to leave room for generation
-        min_generation_tokens = getattr(sampling_params, "max_tokens", None) or 1
-        max_initial_length = max_length - min_generation_tokens
+        max_initial_length = max(max_length - 1, 0)
         if len(current_obs_tokens) > max_initial_length:
-            if pil_images:
-                raise ValueError(
-                    f"VLM prompt length ({len(current_obs_tokens)}) exceeds max_initial_length ({max_initial_length}). "
-                    f"Truncating VLM prompts would break image token alignment with pixel_values. "
-                    f"Please increase --max_len or decrease --max_new_tokens."
-                )
             logger.warning(
                 f"Initial observation length ({len(current_obs_tokens)}) exceeds max_initial_length ({max_initial_length}). "
                 f"Truncating to fit within max_length ({max_length})."
             )
-            current_obs_tokens = current_obs_tokens[-max_initial_length:]
+            current_obs_tokens = current_obs_tokens[-max_initial_length:] if max_initial_length > 0 else []
             # Also update observation_text to match truncated tokens
             observation_text = hf_tokenizer.decode(current_obs_tokens, skip_special_tokens=False)
 
@@ -80,6 +84,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         total_reward = 0
         final_scores = 0
         extra_logs = {}
+        is_truncated = False
 
         if sampling_params.logprobs is not None:
             rollout_log_probs = [0.0] * len(current_obs_tokens)
@@ -88,26 +93,31 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
 
         # Execute multiple steps of interaction
         while True:
-            # Next sampling budget
-            sampling_params.max_tokens = max_length - len(current_obs_tokens)
-            # No budget to generate, break
-            if sampling_params.max_tokens <= 0:
+            remaining = max_length - len(current_obs_tokens)
+            if remaining <= 0:
+                is_truncated = True
                 break
 
-            # Generate response asynchronously (input and output are token ids)
-            mm_data = {"image": pil_images} if pil_images else None
-            request_output = await llm_engine.generate(
-                current_obs_tokens, deepcopy(sampling_params), multi_modal_data=mm_data
-            )
+            sampling_params.max_tokens = remaining
+
+            request_output = await llm_engine.generate(current_obs_tokens, deepcopy(sampling_params))
             action_tokens = request_output.outputs[0].token_ids
             action_text = request_output.outputs[0].text
 
-            # Record action range in token space
             action_start = len(current_obs_tokens)
             action_end = action_start + len(action_tokens)
             action_ranges.append((action_start, action_end))
+            current_obs_tokens = current_obs_tokens + action_tokens
 
-            # Call step function to get environment feedback
+            if sampling_params.logprobs is not None and request_output.outputs[0].logprobs is not None:
+                for token_id, logprob_dict in zip(action_tokens, request_output.outputs[0].logprobs):
+                    token_logprob = logprob_dict.get(token_id)
+                    rollout_log_probs.append(token_logprob.logprob if token_logprob is not None else 0.0)
+
+            if request_output.outputs[0].finish_reason == "length":
+                is_truncated = True
+                break
+
             states = {
                 "observation_text": observation_text,
                 "action_text": action_text,
@@ -119,44 +129,32 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             total_reward += step_result["rewards"].item()
             final_scores = step_result.get("scores", total_reward)
             environment_feedback_text = step_result["environment_feedback"]
-            environment_images = step_result.get("environment_images")
-            done = step_result["done"]
+            if bool(step_result.get("is_truncated", False)):
+                is_truncated = True
+            done = step_result["done"] or is_truncated
             extra_logs = step_result.get("extra_logs", {})
 
-            # Tokenize environment feedback — may contain new images (e.g. screenshots).
-            if environment_images and hasattr(hf_tokenizer, "image_processor"):
-                from openrlhf.utils.vlm_utils import accumulate_mm_inputs, process_prompt_with_images
+            feedback_tokens = hf_tokenizer(environment_feedback_text, add_special_tokens=False, return_tensors="pt")[
+                "input_ids"
+            ][0].tolist()
 
-                feedback_tokens, new_mm, new_pil = process_prompt_with_images(
-                    hf_tokenizer, environment_feedback_text, environment_images
+            if max_tool_response_length is not None and len(feedback_tokens) > max_tool_response_length:
+                head_len = (max_tool_response_length + 1) // 2
+                tail_len = max_tool_response_length - head_len
+                feedback_tokens = (
+                    feedback_tokens[:head_len] + feedback_tokens[-tail_len:]
+                    if tail_len > 0
+                    else feedback_tokens[:head_len]
                 )
-                total_after = len(current_obs_tokens) + len(action_tokens) + len(feedback_tokens)
-                if total_after <= max_length or new_mm is None:
-                    pil_images.extend(new_pil)
-                    mm_train_inputs = accumulate_mm_inputs(mm_train_inputs, new_mm)
-                else:
-                    # Overflow — drop images and strip their pad tokens so
-                    # vLLM doesn't treat them as image placeholders.
-                    mm_pad_ids = {getattr(hf_tokenizer, a, None) for a in ("image_token_id", "video_token_id")} - {
-                        None
-                    }
-                    feedback_tokens = [t for t in feedback_tokens if t not in mm_pad_ids]
-            else:
-                feedback_tokens = hf_tokenizer(
-                    text=environment_feedback_text, add_special_tokens=False, return_tensors="pt"
-                )["input_ids"][0].tolist()
+                environment_feedback_text = hf_tokenizer.decode(feedback_tokens, skip_special_tokens=False)
 
-            # Concatenate observation, action, and environment_feedback
             observation_text = observation_text + action_text + environment_feedback_text
-            current_obs_tokens = current_obs_tokens + action_tokens + feedback_tokens
+            current_obs_tokens = current_obs_tokens + feedback_tokens
 
             # Calculate rollout log probs
             if sampling_params.logprobs is not None:
-                # action tokens logprobs
-                for i, logprob in enumerate(request_output.outputs[0].logprobs):
-                    rollout_log_probs.append(logprob[action_tokens[i]].logprob)
                 # dummy logprobs for the env feedback tokens
-                rollout_log_probs.extend([0.0] * len(feedback_tokens))
+                rollout_log_probs.extend([0.0] * (len(current_obs_tokens) - len(rollout_log_probs)))
 
             # Get sampling params from the environment step
             if step_result.get("sampling_params", None):
@@ -165,20 +163,19 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             if done:
                 break
 
-        # Store the final response when agent execution is complete
-        final_response = {
+        # Store the final response when agent execution is complete.
+        return {
             "prompt": prompt,
             "label": label,
-            "images": images,
-            "mm_train_inputs": mm_train_inputs,
             "reward": total_reward,
             "scores": final_scores,
             "observation_tokens": current_obs_tokens,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
             "extra_logs": extra_logs,
+            "truncated": is_truncated,
+            "is_truncated": is_truncated,
         }
-        return final_response
 
 
 class SingleTurnAgentExecutor(AgentExecutorBase):
@@ -199,51 +196,34 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             spec.loader.exec_module(reward_module)
             self.reward_func = reward_module.reward_func
 
-    async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine, images=None):
-        # Tokenize — for VLM the processor inserts image tokens and returns pixel tensors.
-        pil_images = []
-        mm_train_inputs = None
-        if images and hasattr(hf_tokenizer, "image_processor"):
-            from openrlhf.utils.vlm_utils import process_prompt_with_images
+    async def execute(
+        self,
+        prompt,
+        label,
+        sampling_params,
+        max_length: int,
+        hf_tokenizer,
+        llm_engine,
+        *,
+        max_tool_response_length=None,
+    ):
+        prompt_token_ids = hf_tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][0].tolist()
 
-            prompt_token_ids, mm_train_inputs, pil_images = process_prompt_with_images(hf_tokenizer, prompt, images)
-        else:
-            prompt_token_ids = hf_tokenizer(text=prompt, add_special_tokens=False, return_tensors="pt")["input_ids"][
-                0
-            ].tolist()
-
-        # Compute dynamic max_tokens when not explicitly set (prompt + response share max_length budget)
         effective_params = sampling_params
         if sampling_params.max_tokens is None:
             effective_params = deepcopy(sampling_params)
             effective_params.max_tokens = max(1, max_length - len(prompt_token_ids))
 
-        # Truncate prompt if it's too long to leave room for generation
-        max_prompt_length = max_length - effective_params.max_tokens
+        max_prompt_length = max(max_length - effective_params.max_tokens, 0)
         if len(prompt_token_ids) > max_prompt_length:
-            if pil_images:
-                raise ValueError(
-                    f"VLM prompt length ({len(prompt_token_ids)}) exceeds max_prompt_length ({max_prompt_length}). "
-                    f"Truncating VLM prompts would break image token alignment with pixel_values. "
-                    f"Please increase --max_len or decrease --max_new_tokens."
-                )
             logger.warning(
                 f"Prompt length ({len(prompt_token_ids)}) exceeds max_prompt_length ({max_prompt_length}). "
                 f"Truncating to fit within max_length ({max_length}) with max_tokens ({effective_params.max_tokens})."
             )
-            prompt_token_ids = prompt_token_ids[-max_prompt_length:]
-
-        # Reuse already-loaded PIL images for vLLM generation.
-        mm_data = {"image": pil_images} if pil_images else None
-
-        # Generate one continuation from the engine.
-        request_output = await llm_engine.generate(
-            prompt_token_ids, deepcopy(effective_params), multi_modal_data=mm_data
-        )
+            prompt_token_ids = prompt_token_ids[-max_prompt_length:] if max_prompt_length > 0 else []
+        request_output = await llm_engine.generate(prompt_token_ids, deepcopy(effective_params))
         generation_output = request_output.outputs[0]
         action_token_ids = generation_output.token_ids
-
-        # Check if response was truncated (hit max_tokens length limit)
         is_truncated = generation_output.finish_reason == "length"
 
         # Stitch prompt + action together for downstream consumers.
@@ -260,17 +240,16 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
 
         # Store the final response.
         output = {
-            # Original prompt/label/images are echoed for convenience.
+            # Original prompt/label are echoed for convenience.
             "prompt": prompt,
             "label": label,
-            "images": images,
-            "mm_train_inputs": mm_train_inputs,
             # Token/text observations and action span.
             "observation_tokens": observation_token_ids,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
             # Truncation flag (finish_reason == "length")
             "truncated": is_truncated,
+            "is_truncated": is_truncated,
             # Reward-related fields (filled by reward/agent variants).
             "reward": None,
             "scores": None,
@@ -287,12 +266,9 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
                     rewards_info_list = await self._fetch_rewards_via_http([query], [prompt], [label])
                 rewards_info = rewards_info_list[0] if rewards_info_list else None
                 if rewards_info:
-                    score_value = rewards_info.get("scores")
-                    if score_value is None:
-                        score_value = rewards_info.get("rewards")
                     output.update(
                         reward=rewards_info.get("rewards"),
-                        scores=score_value,
+                        scores=rewards_info.get("scores") or rewards_info.get("rewards"),
                         extra_logs=rewards_info.get("extra_logs") or {},
                     )
             except Exception as e:

@@ -6,17 +6,19 @@ from typing import Dict, Tuple
 
 import ray
 import torch
+import transformers
 from tqdm import tqdm
+
+_TRANSFORMERS_V5 = int(transformers.__version__.split(".")[0]) >= 5
 
 from openrlhf.datasets import PromptDataset
 from openrlhf.datasets.utils import blending_datasets
-from openrlhf.trainer.ppo_utils.experience import balance_experiences
-from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker
+from openrlhf.trainer.ppo_utils.experience_maker import RemoteExperienceMaker, SamplesGenerator
 from openrlhf.trainer.ppo_utils.kl_controller import AdaptiveKLController, FixedKLController
-from openrlhf.trainer.ppo_utils.samples_generator import SamplesGenerator
+from openrlhf.trainer.ppo_utils.replay_buffer import balance_experiences
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 from openrlhf.utils.logging_utils import TensorboardLogger, WandbLogger, init_logger
 from openrlhf.utils.utils import get_tokenizer
 
@@ -28,53 +30,35 @@ def prepare_datasets(strategy, tokenizer):
 
     # prepare datasets
     train_data = blending_datasets(
-        args.data.prompt_dataset,
-        args.data.prompt_probs,
+        args.prompt_data,
+        args.prompt_data_probs,
         strategy,
-        args.train.seed,
-        max_count=args.data.max_samples,
-        dataset_split=args.data.prompt_split,
+        args.seed,
+        max_count=args.max_samples,
+        dataset_split=args.prompt_split,
     )
 
     # Create train dataset
-    train_data = train_data.select(range(min(args.data.max_samples, len(train_data))))
-    prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.data.input_template)
-    prompts_dataloader = strategy.setup_dataloader(
-        prompts_dataset,
-        1,
-        True,
-        True,
-        prompts_dataset.collate_fn,
-        num_workers=args.data.dataloader_num_workers,
-    )
+    train_data = train_data.select(range(min(args.max_samples, len(train_data))))
+    prompts_dataset = PromptDataset(train_data, tokenizer, strategy, input_template=args.input_template)
+    prompts_dataloader = strategy.setup_dataloader(prompts_dataset, 1, True, True, prompts_dataset.collate_fn)
 
     # Create eval dataset if eval data exists
-    if getattr(args.eval, "dataset", None):
+    if getattr(args, "eval_dataset", None):
         eval_data = blending_datasets(
-            args.eval.dataset,
+            args.eval_dataset,
             None,  # No probability sampling for eval datasets
             strategy,
-            dataset_split=args.eval.split,
+            dataset_split=args.eval_split,
         )
-        eval_data = eval_data.select(range(min(args.data.max_samples, len(eval_data))))
-        eval_dataset = PromptDataset(eval_data, tokenizer, strategy, input_template=args.data.input_template)
-        eval_dataloader = strategy.setup_dataloader(
-            eval_dataset,
-            1,
-            True,
-            False,
-            eval_dataset.collate_fn,
-            num_workers=args.data.dataloader_num_workers,
-        )
+        eval_data = eval_data.select(range(min(args.max_samples, len(eval_data))))
+        eval_dataset = PromptDataset(eval_data, tokenizer, strategy, input_template=args.input_template)
+        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False, eval_dataset.collate_fn)
     else:
         eval_dataloader = None
 
     max_steps = (
-        len(prompts_dataset)
-        * args.rollout.n_samples_per_prompt
-        // args.train.batch_size
-        * args.train.num_episodes
-        * args.train.max_epochs
+        len(prompts_dataset) * args.n_samples_per_prompt // args.train_batch_size * args.num_episodes * args.max_epochs
     )
     return prompts_dataloader, eval_dataloader, max_steps
 
@@ -88,7 +72,7 @@ def compute_eval_metrics(eval_dataloader, samples_list, n_samples_per_prompt):
         return {}
 
     prompt_to_datasource = {}
-    for datasources, prompts, labels, _images in eval_dataloader:
+    for datasources, prompts, labels in eval_dataloader:
         for prompt, datasource in zip(prompts, datasources):
             prompt_to_datasource[prompt] = datasource
 
@@ -150,7 +134,7 @@ class BasePPOTrainer(ABC):
 
     def __init__(
         self,
-        strategy: DeepspeedStrategy,
+        strategy: FSDP2Strategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
@@ -168,12 +152,10 @@ class BasePPOTrainer(ABC):
         self.vllm_engines = vllm_engines
         self.tokenizer = tokenizer
 
-        if self.args.algo.kl.target:
-            self.kl_ctl = AdaptiveKLController(
-                self.args.algo.kl.init_coef, self.args.algo.kl.target, self.args.algo.kl.horizon
-            )
+        if self.args.kl_target:
+            self.kl_ctl = AdaptiveKLController(self.args.init_kl_coef, self.args.kl_target, self.args.kl_horizon)
         else:
-            self.kl_ctl = FixedKLController(self.args.algo.kl.init_coef)
+            self.kl_ctl = FixedKLController(self.args.init_kl_coef)
 
         self.experience_maker = RemoteExperienceMaker(
             self.actor_model_group,
@@ -186,26 +168,8 @@ class BasePPOTrainer(ABC):
         )
 
         # Tracking backends
-        self.wandb_logger = WandbLogger(self.args) if self.args.logger.wandb.key else None
-        self.tensorboard_logger = TensorboardLogger(self.args) if self.args.logger.tensorboard_dir else None
-
-        # Best eval metric tracking
-        self.best_eval_metric_value = float("-inf")
-        self.best_eval_metric_key = getattr(self.args.ckpt, "best_metric_key", "") or ""
-        self._latest_eval_metric_value = None
-
-    def restore_best_checkpoint_state(self, checkpoint_states) -> None:
-        if not checkpoint_states:
-            return
-
-        checkpoint_metric_key = checkpoint_states.get("best_eval_metric_key")
-        checkpoint_metric_value = checkpoint_states.get("best_eval_metric_value")
-
-        if checkpoint_metric_key:
-            self.best_eval_metric_key = checkpoint_metric_key
-        if checkpoint_metric_value is not None:
-            self.best_eval_metric_value = checkpoint_metric_value
-            self._latest_eval_metric_value = checkpoint_metric_value
+        self.wandb_logger = WandbLogger(self.args) if self.args.use_wandb else None
+        self.tensorboard_logger = TensorboardLogger(self.args) if self.args.use_tensorboard else None
 
     def fit(self, global_step: int = 0) -> None:
         raise NotImplementedError("fit method is not implemented")
@@ -217,17 +181,18 @@ class BasePPOTrainer(ABC):
         make_experience_time = time.time() - t0
 
         # Peek at the first decoded sample for quick sanity check.
+        _decode = self.tokenizer.decode if _TRANSFORMERS_V5 else self.tokenizer.batch_decode
         sample0 = [
-            self.tokenizer.decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
+            _decode(experiences[0].sequences[0].unsqueeze(0), skip_special_tokens=True)[0],
             experiences[0].info["reward"][0].item(),
         ]
-        logger.info(f"Sample: {sample0}")
+        print(sample0)
 
         # Compute ground-truth rollout stats BEFORE dynamic batch splitting
         rollout_stats = self._compute_rollout_stats(experiences)
 
         # Balance experiences across DP ranks if needed.
-        if self.args.train.dynamic_batch_enable:
+        if self.args.use_dynamic_batch:
             experiences = balance_experiences(experiences, self.args)
 
         # Push experiences to actor (and critic) shards before PPO.
@@ -250,7 +215,7 @@ class BasePPOTrainer(ABC):
         # Refresh KL controller with the latest measurement.
         if "kl" in status:
             # TODO: KL controller must be FixedKLController; AdaptiveKLController is incompatible here.
-            self.kl_ctl.update(status["kl"], self.args.rollout.batch_size * self.args.rollout.n_samples_per_prompt)
+            self.kl_ctl.update(status["kl"], self.args.rollout_batch_size * self.args.n_samples_per_prompt)
 
         # Per-phase timing breakdown
         status["timing/make_experience"] = make_experience_time
@@ -269,16 +234,17 @@ class BasePPOTrainer(ABC):
 
         # Decide whether to train critic/actor this round (actor can be frozen initially).
         run_critic = self.critic_model_group is not None
-        run_actor = global_steps > self.args.critic.freezing_steps and self.actor_model_group is not None
+        run_actor = global_steps > self.args.freezing_actor_steps and self.actor_model_group is not None
 
         def _run_sleep(group, **kwargs):
-            # Sleep mode: reload -> fit -> offload (smaller GPU memory).
+            ray.get(group.async_run_method(method_name="reload_model"))
             ray.get(group.async_run_method(method_name="reload_states"))
             ref = group.async_run_method(method_name="fit", **kwargs)
             status.update(ray.get(ref)[0])
             ray.get(group.async_run_method(method_name="offload_states"))
+            ray.get(group.async_run_method(method_name="offload_model"))
 
-        if self.args.ds.enable_sleep:
+        if self.args.fsdp2_enable_sleep:
             # Colocated/sleeping: run critic first, then actor.
             if run_critic:
                 _run_sleep(self.critic_model_group)
@@ -303,111 +269,50 @@ class BasePPOTrainer(ABC):
         When vllm_enable_sleep is enabled, we use fine-grained control:
         1. Wake up only weights (not KV cache) to minimize GPU memory during weight sync
         2. Broadcast weights from actor model to vLLM
-        3. Keep vLLM in weights-only state; KV cache will be woken up later before generation
+        3. Optionally offload training model to CPU after sync (fsdp2_offload_during_rollout)
+        4. Put vLLM back to sleep to free GPU memory for next training phase
 
         This approach reduces peak GPU memory during gradient sync by avoiding
         simultaneous allocation of both weights and KV cache.
         """
-        if self.args.vllm.enable_sleep:
+        if self.args.vllm_enable_sleep:
             # Wake up only weights for weight sync (not KV cache)
             # This avoids allocating KV cache memory during weight update
             batch_vllm_engine_call(self.vllm_engines, "wake_up", tags=["weights"])
 
         ray.get(self.actor_model_group.async_run_method(method_name="broadcast_to_vllm"))
 
-        # NOTE: We keep vLLM in weights-only state after weight sync.
-        # KV cache will be woken up before generation in SamplesGenerator.
-
-    def _detect_eval_metric_key(self, eval_metrics):
-        """Auto-detect the eval metric key to track for best checkpoint.
-
-        Returns None if best_metric_key is 'none' (disabled) or no suitable metric found.
-        """
-        if self.best_eval_metric_key == "none":
-            return None  # Explicitly disabled
-        if self.best_eval_metric_key:
-            return self.best_eval_metric_key if self.best_eval_metric_key in eval_metrics else None
-        # Auto-detect: prefer eval_*_pass1 metric
-        for key in sorted(eval_metrics):
-            if key.endswith("_pass1"):
-                self.best_eval_metric_key = key
-                return key
-        return None
-
-    def save_best_checkpoint(self, eval_metrics, global_step, client_states=None):
-        """Save checkpoint if eval metric is the best so far.
-
-        When best_metric_key is 'none' or auto-detection fails, this is a no-op
-        (regular save_steps checkpoints still save the most recent).
-        """
-        if not eval_metrics:
-            return
-
-        metric_key = self._detect_eval_metric_key(eval_metrics)
-        if metric_key is None or metric_key not in eval_metrics:
-            return
-
-        current_value = eval_metrics[metric_key]
-        self._latest_eval_metric_value = current_value
-        prev_best = self.best_eval_metric_value
-
-        if current_value > self.best_eval_metric_value:
-            self.best_eval_metric_value = current_value
-            logger.info(
-                f"New best eval metric: {metric_key}={current_value:.4f} at step {global_step} "
-                f"(previous best: {prev_best if prev_best > float('-inf') else 'N/A'})"
-            )
-
-            client_states = client_states or {}
-            client_states["best_eval_metric_key"] = metric_key
-            client_states["best_eval_metric_value"] = current_value
-            client_states["checkpoint_metric_key"] = metric_key
-
-            tag = f"best_global_step{global_step}"
-            refs = self.actor_model_group.async_run_method(
-                method_name="save_checkpoint",
-                tag=tag,
-                client_states=client_states,
-                metric_value=current_value,
-                metric_key=metric_key,
-            )
+        # Offload actor model to CPU to free GPU memory for vLLM during rollout
+        # This is critical for avoiding OOM when vLLM wakes up with full KV cache
+        # Note: reference/reward models are prepared via prepare(..., cpu_offload=...).
+        if self.args.fsdp2_enable_sleep:
+            offload_refs = self.actor_model_group.async_run_method(method_name="offload_model")
             if self.critic_model_group is not None:
-                refs.extend(
-                    self.critic_model_group.async_run_method(
-                        method_name="save_checkpoint", tag=tag, metric_value=current_value, metric_key=metric_key
-                    )
-                )
-            ray.get(refs)
-            logger.info(f"Saved best checkpoint: {tag} ({metric_key}={current_value:.4f})")
+                offload_refs.extend(self.critic_model_group.async_run_method(method_name="offload_model"))
+            ray.get(offload_refs)
 
     def save_logs_and_checkpoints(self, global_step: int, logs_dict=None, client_states=None) -> None:
         logs_dict = logs_dict or {}
-        if global_step % self.args.logger.logging_steps == 0:
+        if global_step % self.args.logging_steps == 0:
             if self.wandb_logger:
                 self.wandb_logger.log_train(global_step, logs_dict)
             if self.tensorboard_logger:
                 self.tensorboard_logger.log_train(global_step, logs_dict)
 
         # save ckpt
+        # TODO: save best model on dev, use loss/perplexity/others on whole dev dataset as metric
         client_states = client_states or {}
-        if global_step % self.args.ckpt.save_steps == 0:
-            tag = f"global_step{global_step}"
-            metric_value = self._latest_eval_metric_value
-            metric_key = client_states.get("checkpoint_metric_key") or self.best_eval_metric_key or None
+        if global_step % self.args.save_steps == 0:
+            tag = f"global_step_{global_step}"
             refs = self.actor_model_group.async_run_method(
-                method_name="save_checkpoint",
-                tag=tag,
-                client_states=client_states,
-                metric_value=metric_value,
-                metric_key=metric_key,
+                method_name="save_checkpoint", tag=tag, client_states=client_states
             )
             if self.critic_model_group is not None:
-                refs.extend(
-                    self.critic_model_group.async_run_method(
-                        method_name="save_checkpoint", tag=tag, metric_value=metric_value, metric_key=metric_key
-                    )
-                )
-            ray.get(refs)
+                refs.extend(self.critic_model_group.async_run_method(method_name="save_checkpoint", tag=tag))
+            any_checkpoint_saved_results = ray.get(refs)
+            if any(any_checkpoint_saved_results):
+                # All roles saved – write top-level latest + cleanup
+                ray.get(self.actor_model_group.async_run_method(method_name="cleanup_old_checkpoints", tag=tag))
 
     def _compute_rollout_stats(self, experiences) -> Dict:
         """Compute ground-truth rollout statistics before dynamic batch splitting."""
@@ -427,8 +332,10 @@ class BasePPOTrainer(ABC):
         return stats
 
     def init_checkpoint_states(self) -> Dict:
-        ckpt_path = os.path.join(self.args.ckpt.path, "_actor")
-        if self.args.ckpt.load_enable and os.path.exists(ckpt_path):
+        if getattr(self.args, "dcp_checkpoint_from_path", None) and getattr(self.args, "resume_training", False):
+            actor_dir = os.path.join(self.args.dcp_checkpoint_from_path, "dcp_checkpoint", "_actor")
+            if not os.path.isdir(actor_dir):
+                raise FileNotFoundError(f"Expected actor checkpoint directory at {actor_dir}")
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]
@@ -452,7 +359,7 @@ class PPOTrainer(BasePPOTrainer):
     def __init__(
         self,
         pretrain: str,
-        strategy: DeepspeedStrategy,
+        strategy: FSDP2Strategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
@@ -461,15 +368,13 @@ class PPOTrainer(BasePPOTrainer):
         **generate_kwargs,
     ) -> None:
         # get eval and save steps
-        if strategy.args.eval.steps == -1:
-            strategy.args.eval.steps = float("inf")  # do not evaluate
-        if strategy.args.ckpt.save_steps == -1:
-            strategy.args.ckpt.save_steps = float("inf")  # do not save ckpt
+        if strategy.args.eval_steps == -1:
+            strategy.args.eval_steps = float("inf")  # do not evaluate
+        if strategy.args.save_steps == -1:
+            strategy.args.save_steps = float("inf")  # do not save ckpt
 
         # Tokenizer is shared across the sample generator and trainer to avoid duplicated loads.
-        tokenizer = get_tokenizer(
-            pretrain, None, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
-        )
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
         self.prompts_dataloader, self.eval_dataloader, self.max_steps = prepare_datasets(strategy, tokenizer)
         self.generate_kwargs = generate_kwargs
 
@@ -498,7 +403,6 @@ class PPOTrainer(BasePPOTrainer):
 
     def fit(self, global_step: int = 0) -> None:
         checkpoint_states = self.init_checkpoint_states()
-        self.restore_best_checkpoint_state(checkpoint_states)
         # Restore step and start_epoch
         start_episode = checkpoint_states["episode"]
         # Use checkpoint's global_step if resuming, otherwise use the parameter
@@ -513,11 +417,11 @@ class PPOTrainer(BasePPOTrainer):
             if state_dict:
                 self.prompts_dataloader.load_state_dict(state_dict)
 
-        for episode in range(start_episode, self.args.train.num_episodes):
+        for episode in range(start_episode, self.args.num_episodes):
             dataset_length = len(self.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
-                desc=f"Episode [{episode + 1}/{self.args.train.num_episodes}]",
+                desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
                 initial=total_consumed_prompts % max(dataset_length, 1),
             )
             while True:
@@ -528,10 +432,8 @@ class PPOTrainer(BasePPOTrainer):
                 )
                 generation_time = time.time() - t_gen_start
                 total_consumed_prompts += prompts_consumed
-                if not rollout_samples:
-                    if is_exhausted:
-                        break
-                    continue
+                if is_exhausted:
+                    break
 
                 # Run PPO update on this batch and bump the global step counter.
                 status, global_step = self.train_step(rollout_samples, global_step)
@@ -541,7 +443,7 @@ class PPOTrainer(BasePPOTrainer):
                 status["timing/step_total"] = sum(v for k, v in status.items() if k.startswith("timing/"))
 
                 # Add generated samples to status dictionary
-                if self.args.algo.dynamic_filtering_enable:
+                if self.args.dynamic_filtering:
                     status["dynamic_filtering_pass_rate"] = filter_pass_rate
                 log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
                 logger.info(f"✨ Global step {global_step}: {log_status}")
@@ -555,18 +457,14 @@ class PPOTrainer(BasePPOTrainer):
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
-                # Evaluation and best checkpoint saving
-                if global_step % self.args.eval.steps == 0 and self.eval_dataloader:
+                # TODO: Add evaluation mechanism for PPO
+                if global_step % self.args.eval_steps == 0 and self.eval_dataloader:
                     eval_generate_kwargs = self.generate_kwargs.copy()
-                    eval_generate_kwargs["temperature"] = self.args.eval.temperature
-                    eval_generate_kwargs["n_samples_per_prompt"] = self.args.eval.n_samples_per_prompt
-                    eval_logs = self.evaluate(global_step, **eval_generate_kwargs)
-                    self.save_best_checkpoint(eval_logs, global_step, client_states)
+                    eval_generate_kwargs["temperature"] = self.args.eval_temperature
+                    eval_generate_kwargs["n_samples_per_prompt"] = self.args.eval_n_samples_per_prompt
+                    self.evaluate(global_step, **eval_generate_kwargs)
 
                 pbar.update(prompts_consumed)
-
-                if is_exhausted:
-                    break
 
         # Close trackers
         if self.wandb_logger:
@@ -592,4 +490,3 @@ class PPOTrainer(BasePPOTrainer):
         duration = end_time - start_time
         time_str = str(timedelta(seconds=duration)).split(".")[0]
         logger.info(f"✨ Evaluation completed in {time_str}, global_step {global_step}, eval_metrics: {logs}")
-        return logs

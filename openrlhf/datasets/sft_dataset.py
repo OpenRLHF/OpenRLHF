@@ -7,7 +7,7 @@ from openrlhf.utils.utils import zero_pad_sequences
 
 
 def preprocess_data(
-    data, input_template=None, input_key="input", output_key=None, apply_chat_template=None
+    data, input_template=None, input_key="input", output_key=None, apply_chat_template=None, multiturn=False
 ):
     if apply_chat_template:
         if output_key:
@@ -55,20 +55,20 @@ class SFTDataset(Dataset):
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
-        self.strategy = strategy
         self.pretrain_mode = pretrain_mode
         self.max_length = max_length
         self.multiturn = multiturn
+        args = strategy.args
 
         # chat template
         self.input_template = input_template
-        self.input_key = getattr(self.strategy.args.data, "input_key", None)
-        self.output_key = getattr(self.strategy.args.data, "output_key", None)
-        self.apply_chat_template = getattr(self.strategy.args.data, "apply_chat_template", False)
+        self.input_key = getattr(args, "input_key", None)
+        self.output_key = getattr(args, "output_key", None)
+        self.apply_chat_template = getattr(args, "apply_chat_template", False)
 
         if self.apply_chat_template:
             self.apply_chat_template = self.tokenizer.apply_chat_template
-            tokenizer_chat_template = getattr(self.strategy.args.data, "tokenizer_chat_template", None)
+            tokenizer_chat_template = getattr(args, "tokenizer_chat_template", None)
             if tokenizer_chat_template:
                 self.tokenizer.chat_template = tokenizer_chat_template
 
@@ -140,6 +140,7 @@ class SFTDataset(Dataset):
             self.input_key,
             self.output_key,
             apply_chat_template=None if self.pretrain_mode else self.apply_chat_template,
+            multiturn=self.multiturn,
         )
 
         if not self.pretrain_mode:

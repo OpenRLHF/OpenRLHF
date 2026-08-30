@@ -130,6 +130,7 @@ class AgentInstance(AgentInstanceBase):
             "scores": torch.tensor(reward),  # Scores for dynamic filtering (0-1 reward)
             "environment_feedback": next_observation,  # Environment feedback text
             "done": done,  # Boolean indicating if the episode is complete
+            "is_truncated": truncated,
             "sampling_params": states.get("sampling_params", None),  # Parameters for vLLM sampling in next step
             "extra_logs": {
                 "dummy_scores": torch.tensor(reward),

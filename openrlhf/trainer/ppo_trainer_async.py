@@ -6,10 +6,10 @@ from ray.util.queue import Queue
 from tqdm import tqdm
 
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer, compute_eval_metrics, prepare_datasets
-from openrlhf.trainer.ppo_utils.samples_generator import SamplesGenerator
+from openrlhf.trainer.ppo_utils.experience_maker import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
 
@@ -49,9 +49,7 @@ class GenerateSamplesActor:
     ):
         self.args = strategy.args
 
-        tokenizer = get_tokenizer(
-            pretrain, None, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
-        )
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
         self.prompts_dataloader, self.eval_dataloader, self.max_steps = prepare_datasets(strategy, tokenizer)
         self.generate_kwargs = generate_kwargs
 
@@ -64,7 +62,7 @@ class GenerateSamplesActor:
         )
 
         self.vllm_lock = vllm_lock
-        self._partial_rollout = getattr(strategy.args.train, "partial_rollout_enable", False)
+        self._partial_rollout = getattr(strategy.args, "partial_rollout", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
         self._last_eval_step = -1
@@ -79,40 +77,34 @@ class GenerateSamplesActor:
     def _should_eval(self, global_step):
         return (
             self.eval_dataloader is not None
-            and self.args.eval.steps != float("inf")
+            and self.args.eval_steps != float("inf")
             and global_step > 0
-            and global_step % self.args.eval.steps == 0
+            and global_step % self.args.eval_steps == 0
             and global_step != self._last_eval_step
         )
 
     def _run_eval(self):
-        """Run evaluation and return metrics dict."""
         logger.info("Starting async evaluation...")
         eval_kwargs = self.generate_kwargs.copy()
-        eval_kwargs["temperature"] = self.args.eval.temperature
-        eval_kwargs["n_samples_per_prompt"] = self.args.eval.n_samples_per_prompt
+        eval_kwargs["temperature"] = self.args.eval_temperature
+        eval_kwargs["n_samples_per_prompt"] = self.args.eval_n_samples_per_prompt
 
         samples_list = self.samples_generator.generate_eval_samples(**eval_kwargs)
-        logs = compute_eval_metrics(self.eval_dataloader, samples_list, self.args.eval.n_samples_per_prompt)
+        logs = compute_eval_metrics(self.eval_dataloader, samples_list, self.args.eval_n_samples_per_prompt)
         logger.info(f"Async evaluation completed: {logs}")
         return logs
 
     def fit(self, episode: int, total_consumed_prompts: int) -> None:
-        for episode in range(episode, self.args.train.num_episodes):
+        for episode in range(episode, self.args.num_episodes):
             dataset_length = len(self.prompts_dataloader)
             pbar = tqdm(
                 range(dataset_length),
-                desc=f"Episode [{episode + 1}/{self.args.train.num_episodes}]",
+                desc=f"Episode [{episode + 1}/{self.args.num_episodes}]",
                 initial=total_consumed_prompts % max(dataset_length, 1),
             )
             while True:
-                # Backpressure: slot token carries trainer's latest global_step for eval timing.
                 global_step = self.rollout_slots.get(block=True)
 
-                # Run evaluation if triggered by trainer's step count.
-                # _eval_just_done prevents back-to-back evals: after eval the
-                # trainer returns global_step without training, so the next
-                # token may hit another eval_steps multiple on the same weights.
                 if self._should_eval(global_step) and not self._eval_just_done:
                     self._eval_just_done = True
                     self._last_eval_step = global_step
@@ -126,7 +118,6 @@ class GenerateSamplesActor:
                 self._eval_just_done = False
 
                 if not self._partial_rollout:
-                    # Normal async: hold lock so weight broadcast cannot overlap with generation.
                     ray.get(self.vllm_lock.acquire.remote())
                 try:
                     t0 = time.time()
@@ -152,8 +143,6 @@ class GenerateSamplesActor:
                     if prompts_consumed:
                         pbar.update(prompts_consumed)
                 else:
-                    # Nothing enqueued => trainer will never "consume" this slot,
-                    # so we must return the token here (prevents token leak / deadlock).
                     self.rollout_slots.put(global_step, block=True)
 
                 if is_exhausted:
@@ -180,9 +169,7 @@ class TrainingActor(BasePPOTrainer):
         rollout_queue,
         rollout_slots,
     ):
-        tokenizer = get_tokenizer(
-            pretrain, None, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
-        )
+        tokenizer = get_tokenizer(pretrain, None, "left", strategy, use_fast=not strategy.args.disable_fast_tokenizer)
 
         super().__init__(
             strategy,
@@ -195,19 +182,17 @@ class TrainingActor(BasePPOTrainer):
         )
 
         self.vllm_lock = vllm_lock
-        self._partial_rollout = getattr(strategy.args.train, "partial_rollout_enable", False)
+        self._partial_rollout = getattr(strategy.args, "partial_rollout", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
 
     def fit(self, global_step: int = 0) -> None:
         step_start_time = time.time()
-        self._latest_client_states = {}
         while True:
             payload = self.rollout_queue.get(block=True)
             if payload == "done":
                 break
 
-            # Handle eval results from generator.
             if payload[0] == "eval":
                 _, eval_step, eval_metrics = payload
                 self.rollout_slots.put(global_step, block=True)
@@ -216,35 +201,26 @@ class TrainingActor(BasePPOTrainer):
                     self.wandb_logger.log_eval(eval_step, eval_metrics)
                 if self.tensorboard_logger:
                     self.tensorboard_logger.log_eval(eval_step, eval_metrics)
-                # Save best checkpoint if this eval metric is the best so far
-                client_states = dict(self._latest_client_states)
-                client_states["global_step"] = global_step
-                self.save_best_checkpoint(eval_metrics, eval_step, client_states)
-                # Reset so the next training step's timing excludes eval overhead.
                 step_start_time = time.time()
                 continue
 
             rollout_samples, client_states, filter_pass_rate, generation_time = payload
 
-            # Batch consumed => free one token to allow generator to produce next batch.
             self.rollout_slots.put(global_step, block=True)
 
             status, global_step = self.train_step(rollout_samples, global_step)
 
             status["timing/generation"] = generation_time
-            # Wall-clock time for the full iteration (including queue wait),
-            # NOT the sum of component durations (which overlap in async mode).
             status["timing/step_total"] = time.time() - step_start_time
             step_start_time = time.time()
 
-            if self.args.algo.dynamic_filtering_enable:
+            if self.args.dynamic_filtering:
                 status["dynamic_filtering_pass_rate"] = filter_pass_rate
 
             log_status = {k: v for k, v in status.items() if k not in ["generated_samples"]}
             logger.info(f"Global step {global_step}: {log_status}")
 
             client_states.update({"global_step": global_step})
-            self._latest_client_states = client_states
             self.save_logs_and_checkpoints(global_step, status, client_states)
 
         if self.wandb_logger:
@@ -253,7 +229,6 @@ class TrainingActor(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def broadcast_to_vllm(self):
-        # Lock prevents weight broadcast from overlapping with eval generation.
         ray.get(self.vllm_lock.acquire.remote())
         if self._partial_rollout:
             batch_vllm_engine_call(self.vllm_engines, "pause_generation")
@@ -270,7 +245,7 @@ class PPOTrainerAsync:
     def __init__(
         self,
         pretrain: str,
-        strategy: DeepspeedStrategy,
+        strategy: FSDP2Strategy,
         actor_model_group: RayActorGroup,
         critic_model_group: RayActorGroup,
         reward_model_group: RayActorGroup,
@@ -278,27 +253,21 @@ class PPOTrainerAsync:
         vllm_engines,
         **generate_kwargs,
     ) -> None:
-        # get eval and save steps
-        if strategy.args.eval.steps == -1:
-            strategy.args.eval.steps = float("inf")  # do not evaluate
-        if strategy.args.ckpt.save_steps == -1:
-            strategy.args.ckpt.save_steps = float("inf")  # do not save ckpt
+        if strategy.args.eval_steps == -1:
+            strategy.args.eval_steps = float("inf")
+        if strategy.args.save_steps == -1:
+            strategy.args.save_steps = float("inf")
 
-        queue_size = getattr(strategy.args.train, "async_queue_size", 1)
+        queue_size = getattr(strategy.args, "async_queue_size", 1)
         if queue_size <= 0:
             raise ValueError(f"async_queue_size must be positive, got {queue_size}")
         logger.info(f"queue_size={queue_size}")
 
         self.rollout_queue = Queue(maxsize=queue_size)
-
-        # Token pool (counting semaphore) for queue capacity.
         self.rollout_slots = Queue(maxsize=queue_size)
         for _ in range(queue_size):
             self.rollout_slots.put(0, block=True)
 
-        # Lock ensures eval generation and weight broadcast never overlap.
-        # In partial_rollout mode, normal generation runs without the lock
-        # (pause/resume handles weight sync), but eval still needs it.
         vllm_lock = VLLMLock.remote()
 
         self.generator_actor = GenerateSamplesActor.remote(
@@ -326,13 +295,10 @@ class PPOTrainerAsync:
 
     def fit(self) -> None:
         checkpoint_states = ray.get(self.trainer_actor.init_checkpoint_states.remote())
-        ray.get(self.trainer_actor.restore_best_checkpoint_state.remote(checkpoint_states))
 
-        # Restore step and epoch
         start_episode = checkpoint_states["episode"]
         global_step = checkpoint_states["global_step"]
         total_consumed_prompts = checkpoint_states.get("total_consumed_prompts", 0)
-        # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step > 0:
             ray.get(
                 [
@@ -341,7 +307,6 @@ class PPOTrainerAsync:
                 ]
             )
 
-        # Launch async training
         ray.get(
             [
                 self.generator_actor.fit.remote(episode=start_episode, total_consumed_prompts=total_consumed_prompts),

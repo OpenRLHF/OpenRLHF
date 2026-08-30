@@ -38,7 +38,7 @@ class RewardModelTrainer(ABC):
         max_norm=0.5,
         max_epochs: int = 2,
         loss="sigmoid",
-        disable_ds_ckpt=False,
+        disable_fsdp2_ckpt=False,
         save_hf_ckpt=False,
     ) -> None:
         super().__init__()
@@ -52,7 +52,7 @@ class RewardModelTrainer(ABC):
         self.optimizer = optim
         self.tokenizer = tokenizer
         self.args = strategy.args
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
         self.save_hf_ckpt = save_hf_ckpt
 
         if loss == "sigmoid":
@@ -63,28 +63,28 @@ class RewardModelTrainer(ABC):
             self.strategy.print("LogExp Loss")
 
         # Mixtral 8*7b
-        self.aux_loss = self.args.model.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         # packing samples
-        self.packing_samples = strategy.args.ds.packing_samples
+        self.packing_samples = strategy.args.packing_samples
 
-        self.margin_loss = self.strategy.args.model.margin_loss_enable
-        self.compute_fp32_loss = self.strategy.args.model.compute_fp32_loss_enable
+        self.margin_loss = self.strategy.args.margin_loss
+        self.compute_fp32_loss = self.strategy.args.compute_fp32_loss
 
         # wandb/tensorboard setting
         self._wandb = None
         self._tensorboard = None
-        if self.strategy.args.logger.wandb.key and self.strategy.is_rank_0():
+        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
 
             self._wandb = wandb
             if not wandb.api.api_key:
-                wandb.login(key=strategy.args.logger.wandb.key)
+                wandb.login(key=strategy.args.use_wandb)
             wandb.init(
-                entity=strategy.args.logger.wandb.org,
-                project=strategy.args.logger.wandb.project,
-                group=strategy.args.logger.wandb.group,
-                name=strategy.args.logger.wandb.run_name,
+                entity=strategy.args.wandb_org,
+                project=strategy.args.wandb_project,
+                group=strategy.args.wandb_group,
+                name=strategy.args.wandb_run_name,
                 config=strategy.args.__dict__,
                 reinit=True,
             )
@@ -95,11 +95,11 @@ class RewardModelTrainer(ABC):
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
         # Initialize TensorBoard writer if wandb is not available
-        if self.strategy.args.logger.tensorboard_dir and self._wandb is None and self.strategy.is_rank_0():
+        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
             from torch.utils.tensorboard import SummaryWriter
 
-            os.makedirs(self.strategy.args.logger.tensorboard_dir, exist_ok=True)
-            log_dir = os.path.join(self.strategy.args.logger.tensorboard_dir, strategy.args.logger.wandb.run_name)
+            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
@@ -113,16 +113,16 @@ class RewardModelTrainer(ABC):
             )
 
         # get eval and save steps
-        if args.eval.steps == -1:
-            args.eval.steps = num_update_steps_per_epoch  # Evaluate once per epoch
-        if args.ckpt.save_steps == -1:
-            args.ckpt.save_steps = float("inf")  # do not save ckpt
+        if args.eval_steps == -1:
+            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
         self.num_update_steps_per_epoch = num_update_steps_per_epoch
 
         # Restore step and start_epoch
-        step = consumed_samples // args.train.batch_size * self.strategy.accumulated_gradient + 1
-        start_epoch = consumed_samples // args.train.batch_size // num_update_steps_per_epoch
-        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train.batch_size)
+        step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
+        start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
+        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
         epoch_bar = tqdm(range(start_epoch, self.epochs), desc="Train epoch", disable=not self.strategy.is_rank_0())
         acc_sum = 0
@@ -168,9 +168,10 @@ class RewardModelTrainer(ABC):
                 if not self.aux_loss:
                     aux_loss = 0
 
-                loss = preference_loss + aux_loss * self.args.model.aux_loss_coef
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+                loss = preference_loss + aux_loss * self.args.aux_loss_coef
+                self.strategy.backward(loss, self.model)
+                grad_norm = self.strategy.get_grad_norm(self.model)
+                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, grad_norm=grad_norm)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
                 acc_sum += acc
@@ -182,7 +183,7 @@ class RewardModelTrainer(ABC):
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
+                    "grad_norm": grad_norm,
                 }
                 if self.aux_loss:
                     logs_dict["aux_loss"] = aux_loss.item()
@@ -199,7 +200,7 @@ class RewardModelTrainer(ABC):
                     loss_sum = 0
                     acc_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
-                    client_states = {"consumed_samples": global_step * args.train.batch_size}
+                    client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step += 1
@@ -211,10 +212,8 @@ class RewardModelTrainer(ABC):
             self._tensorboard.close()
 
     # logs/checkpoints/evaluate
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict=None, client_states=None):
-        logs_dict = logs_dict or {}
-        client_states = client_states or {}
-        if global_step % args.logger.logging_steps == 0:
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
@@ -226,7 +225,7 @@ class RewardModelTrainer(ABC):
 
         # eval
         if (
-            global_step % args.eval.steps == 0 or global_step % self.num_update_steps_per_epoch == 0
+            global_step % args.eval_steps == 0 or global_step % self.num_update_steps_per_epoch == 0
         ) and self.eval_dataloader is not None:
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
@@ -234,15 +233,24 @@ class RewardModelTrainer(ABC):
 
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
-        if global_step % args.ckpt.save_steps == 0:
-            tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
-                self.strategy.save_ckpt(
-                    self.model, args.ckpt.path, tag, args.ckpt.max_num, args.ckpt.max_mem, client_states
+        if global_step % args.save_steps == 0:
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
+            if not self.disable_fsdp2_ckpt:
+                self.strategy.save_dcp_checkpoint(
+                    self.model,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         step_bar = tqdm(
@@ -292,6 +300,7 @@ class RewardModelTrainer(ABC):
             unwrap_model = self.strategy._unwrap_model(self.model)
             unwrap_model.config.mean = reward_mean.item()
             unwrap_model.config.std = reward_std.item()
+            unwrap_model.reset_buffers()
 
             bar_dict = {
                 "eval_loss": loss_mean,
@@ -322,7 +331,10 @@ class RewardModelTrainer(ABC):
         """
         input_ids, att_masks = self.concatenated_inputs(chosen_ids, c_mask, reject_ids, r_mask)
         all_values, output = model(
-            input_ids, attention_mask=att_masks, return_output=True, ring_attn_group=self.strategy.ring_attn_group
+            input_ids,
+            attention_mask=att_masks,
+            return_output=True,
+            ring_attn_group=self.strategy.ring_attn_group,
         )
         chosen_rewards = all_values[: chosen_ids.shape[0]]
         rejected_rewards = all_values[chosen_ids.shape[0] :]

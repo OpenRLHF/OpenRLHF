@@ -1,3 +1,4 @@
+import math
 import os
 from abc import ABC
 from typing import Dict, Optional, Union
@@ -7,17 +8,13 @@ import torch
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from transformers.trainer import get_scheduler
 
 from openrlhf.models import ValueLoss, get_llm_for_sequence_regression
 from openrlhf.models.utils import masked_mean
-from openrlhf.trainer.ppo_utils.experience import Experience
+from openrlhf.trainer.ppo_utils.experience_maker import Experience
 from openrlhf.utils import get_tokenizer
-from openrlhf.utils.deepspeed import DeepspeedStrategy
-from openrlhf.utils.deepspeed.deepspeed_utils import (
-    offload_deepspeed_states,
-    reload_deepspeed_states,
-)
-from openrlhf.utils.loss_utils import get_loss_batch_info, iter_grad_accum_global_norm
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 
 from ..ppo_utils import NaiveReplayBuffer
 from .launcher import BaseModelActor
@@ -47,35 +44,33 @@ class CriticPPOTrainer(ABC):
         self.buffer_cpu_offload = buffer_cpu_offload
         self.value_clip = value_clip
         self.dataloader_pin_memory = dataloader_pin_memory
-        self.max_epochs = self.args.train.max_epochs
+        self.max_epochs = self.args.max_epochs
 
         self.replay_buffer = NaiveReplayBuffer(
             micro_train_batch_size,
             buffer_limit,
             buffer_cpu_offload,
-            self.args.ds.packing_samples,
-            self.args.train.dynamic_batch_enable,
+            getattr(self.args, "packing_samples", False),
+            self.args.use_dynamic_batch,
         )
 
         self.critic_loss_fn = ValueLoss(value_clip)
 
         # Mixtral 8x7b
-        self.aux_loss = self.args.actor.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
     def ppo_train(self):
         # replay buffer may be empty at first, we should rebuild at each training
-        if self.args.train.dynamic_batch_enable:
+        if self.args.use_dynamic_batch:
             self.replay_buffer.setup_dynamic_batch(self.strategy)
 
-        should_shuffle = (
-            self.strategy.ring_attn_group is None
-            and self.args.ds.tensor_parallel_size <= 1
-            and not self.args.train.dynamic_batch_enable
+        not_shuffle = (
+            self.strategy.ring_attn_group is not None or self.args.fsdp2_tp_size > 1 or self.args.use_dynamic_batch
         )
         dataloader = DataLoader(
             self.replay_buffer,
             batch_size=self.replay_buffer.sample_batch_size,
-            shuffle=should_shuffle,
+            shuffle=not not_shuffle,
             drop_last=True,
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
@@ -90,18 +85,9 @@ class CriticPPOTrainer(ABC):
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
-            # Pair each experience with its loss normalization. Dynamic batching computes it
-            # from the replay buffer inside training_step (loss_batch_info=None); otherwise we
-            # normalize by the optimizer-step window's global token count.
-            if self.args.train.dynamic_batch_enable:
-                micro_batches = ((exp, None) for exp in pbar)
-            else:
-                micro_batches = iter_grad_accum_global_norm(
-                    pbar, self.strategy, self.strategy.accumulated_gradient, lambda e: e.action_mask
-                )
-            for step, (experience, loss_batch_info) in enumerate(micro_batches):
+            for step, experience in enumerate(pbar):
                 experience.to_device(device)
-                status = self.training_step(experience, step, loss_batch_info)
+                status = self.training_step(experience, step)
 
                 # for DP
                 status = self.strategy.all_reduce(status)
@@ -118,9 +104,7 @@ class CriticPPOTrainer(ABC):
                 status_mean[k] /= len(status_list)
         return status_mean
 
-    def training_step(
-        self, experience: Experience, step: int, loss_batch_info: Optional[Dict] = None
-    ) -> Dict[str, float]:
+    def training_step(self, experience: Experience, step: int) -> Dict[str, float]:
         self.critic.train()
 
         sequences = experience.sequences
@@ -129,14 +113,6 @@ class CriticPPOTrainer(ABC):
         action_mask = experience.action_mask
         packed_seq_lens = None
         attention_mask = experience.attention_mask
-        if loss_batch_info is None:
-            loss_batch_info = get_loss_batch_info(
-                self.strategy,
-                action_mask,
-                replay_buffer=self.replay_buffer,
-                step=step,
-                dynamic_batch=self.args.train.dynamic_batch_enable,
-            )
 
         # critic loss
         values, output = self.critic(
@@ -145,6 +121,7 @@ class CriticPPOTrainer(ABC):
             attention_mask=attention_mask,
             return_output=True,
             ring_attn_group=self.strategy.ring_attn_group,
+            values_allgather=True,
             packed_seq_lens=packed_seq_lens,
         )
 
@@ -154,97 +131,117 @@ class CriticPPOTrainer(ABC):
             old_values,
             returns,
             action_mask=experience.action_mask,
-            **loss_batch_info,
         )
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
         else:
             aux_loss = 0
-        aux_loss = aux_loss * self.args.actor.aux_loss_coef
-        if self.args.train.dynamic_batch_enable:
-            aux_loss = aux_loss * self.replay_buffer.dynamic_sample_loss_scale[step]
-        loss = critic_loss + aux_loss
+        loss = critic_loss + aux_loss * self.args.aux_loss_coef
+        opt_update_boundary = True
+        if self.args.use_dynamic_batch:
+            loss = loss * self.replay_buffer.dynamic_loss_scale[step]
+            opt_update_boundary = self.replay_buffer.dynamic_is_last_micro_batch[step]
 
-        self.strategy.backward(loss, self.critic, self.critic_optim)
-        if self.args.train.dynamic_batch_enable:
-            if self.replay_buffer.dynamic_optimizer_step[step]:
-                self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
-        else:
-            self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+        self.strategy.backward(loss, self.critic, name="critic", sync_gradients=opt_update_boundary)
+        critic_grad_norm = self.strategy.get_grad_norm(self.critic)
+        if opt_update_boundary:
+            self.strategy.optimizer_step(
+                self.critic_optim,
+                self.critic,
+                self.critic_scheduler,
+                name="critic",
+                grad_norm=critic_grad_norm,
+            )
 
         # status
         status = {
             "critic_loss": critic_loss.detach().item(),
             "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
-            "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
+            "critic_grad_norm": critic_grad_norm,
         }
         return status
 
 
 @ray.remote(num_gpus=1)
 class CriticModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain, max_steps):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain, max_steps):
         args = strategy.args
-        self.disable_ds_ckpt = args.ckpt.disable_ds
+        self.disable_fsdp2_ckpt = args.disable_fsdp2_ckpt
 
         self._setup_distributed(strategy)
         critic = get_llm_for_sequence_regression(
             pretrain,
             "critic",
-            normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            lora_rank=strategy.args.ds.lora.rank,
-            lora_alpha=strategy.args.ds.lora.alpha,
-            target_modules=strategy.args.ds.lora.target_modules,
-            lora_dropout=strategy.args.ds.lora.dropout,
-            ds_config=strategy.get_ds_train_config(),
-            value_head_prefix=strategy.args.ds.value_head_prefix,
-            init_value_head=strategy.args.actor.model_name_or_path == strategy.args.critic.model_name_or_path,
-            packing_samples=strategy.args.ds.packing_samples,
+            normalize_reward=strategy.args.normalize_reward,
+            attn_implementation=strategy.args.attn_implementation,
+            torch_dtype=torch.float32,
+            packing_samples=strategy.args.packing_samples,
         )
         strategy.print(critic)
-        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
+        strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
         strategy.print("mean: {}, std {}".format(critic.mean, critic.std))
 
-        # configure tokenizer (only when we plan to save the critic weights as HF)
-        self.tokenizer = None
-        if strategy.args.critic.save_value_network:
-            self.tokenizer = get_tokenizer(
-                pretrain, critic, "left", strategy, use_fast=not strategy.args.data.disable_fast_tokenizer
-            )
-
-        if args.actor.gradient_checkpointing_enable:
+        if args.gradient_checkpointing:
             critic.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": args.actor.gradient_checkpointing_reentrant}
+                gradient_checkpointing_kwargs={"use_reentrant": args.gradient_checkpointing_use_reentrant}
             )
 
-        # Critic reads its own args.critic.* sub-namespace.  Typical setup: actor may
-        # use Muon but --critic.optim stays adam because value heads are essentially 1D.
-        critic_cfg = dict(
-            optim=args.critic.optim,
-            muon=vars(args.critic.muon),
-            adam=vars(args.critic.adam),
-            lr_scheduler=args.critic.lr_scheduler,
-            lr_warmup_ratio=args.critic.lr_warmup_ratio,
-            min_lr_ratio=args.critic.min_lr_ratio,
-            max_norm=args.critic.max_norm,
-            scheduler_steps=max_steps,
+        # Wrap/shard model(s) before building optimizer/scheduler (params become DTensor/sharded).
+        critic = strategy.apply_parallelism(critic)
+        dcp_checkpoint_from_path = getattr(args, "dcp_checkpoint_from_path", None)
+        strategy.model_to_empty(critic)
+        if not dcp_checkpoint_from_path:
+            strategy.load_hf_checkpoint(
+                critic,
+                pretrain,
+                force_init_value_head=strategy.args.force_init_value_head,
+            )
+
+        # configure optimizer (after model wrapping for FSDP2)
+        critic_optim = strategy.create_optimizer(
+            critic, lr=args.critic_learning_rate, betas=args.adam_betas, weight_decay=args.l2
         )
-        self.critic, self.critic_optim, self.critic_scheduler = strategy.prepare((critic, critic_cfg))
+
+        # configure scheduler
+        critic_scheduler = get_scheduler(
+            args.lr_scheduler,
+            critic_optim,
+            num_warmup_steps=math.ceil(max_steps * args.lr_warmup_ratio),
+            num_training_steps=max_steps,
+            scheduler_specific_kwargs={"min_lr": args.critic_learning_rate * 0.1},
+        )
+
+        self.critic = critic
+        self.critic_optim = critic_optim
+        self.critic_scheduler = critic_scheduler
+        self.tokenizer = get_tokenizer(
+            pretrain,
+            strategy._unwrap_model(critic),
+            "left",
+            strategy,
+            use_fast=not strategy.args.disable_fast_tokenizer,
+        )
 
         # load checkpoint
-        ckpt_path = os.path.join(args.ckpt.path, "_critic")
-        if args.ckpt.load_enable and os.path.exists(ckpt_path):
-            strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            strategy.load_ckpt(self.critic, ckpt_path)
+        if getattr(args, "resume_training", False) and not dcp_checkpoint_from_path:
+            raise ValueError("--resume_training requires --dcp_checkpoint_from_path.")
+        if dcp_checkpoint_from_path:
+            critic_dir = os.path.join(dcp_checkpoint_from_path, "dcp_checkpoint", "_critic")
+            if not os.path.isdir(critic_dir):
+                raise FileNotFoundError(f"Expected critic checkpoint directory at {critic_dir}")
+            if args.resume_training:
+                strategy.print(f"Resuming critic training from: {critic_dir}")
+                strategy.load_dcp_resume(
+                    self.critic, critic_dir, optimizer=self.critic_optim, scheduler=self.critic_scheduler
+                )
+            else:
+                strategy.print(f"Loading critic model weights only from: {critic_dir}")
+                strategy.load_dcp_resume(self.critic, critic_dir, load_module_only=True)
 
         # initial offload
-        if strategy.args.ds.enable_sleep:
+        if strategy.args.fsdp2_enable_sleep:
             self.offload_states()
 
         # configure Trainer
@@ -253,8 +250,8 @@ class CriticModelActor(BaseModelActor):
             critic=self.critic,
             critic_optim=self.critic_optim,
             critic_scheduler=self.critic_scheduler,
-            micro_train_batch_size=args.train.micro_batch_size,
-            value_clip=args.critic.value_clip,
+            micro_train_batch_size=args.micro_train_batch_size,
+            value_clip=args.value_clip,
         )
 
     def forward(
@@ -273,6 +270,7 @@ class CriticModelActor(BaseModelActor):
                 action_mask.to(device),
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
+                values_allgather=True,
             )
         self.critic.train()  # reset model state
         return value.to("cpu")
@@ -291,34 +289,38 @@ class CriticModelActor(BaseModelActor):
         torch.cuda.synchronize()
         return status
 
-    def save_model(self):
-        args = self.strategy.args
-        if self.tokenizer is None:
-            # critic built without --critic.save_value_network; nothing to persist as HF weights
-            return
+    def save_checkpoint(self, tag):
+        if self.disable_fsdp2_ckpt:
+            return False
 
-        # save model checkpoint after fitting on only rank0
-        self.strategy.save_model(
+        step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+        self.strategy.save_dcp_checkpoint(
+            self.critic,
+            os.path.join(step_dir, "dcp_checkpoint", "_critic"),
+            optimizer=self.critic_optim,
+            scheduler=self.critic_scheduler,
+        )
+        return True
+
+    def save_model(self):
+        self.strategy.save_hf_checkpoint(
             self.critic,
             self.tokenizer,
-            args.ckpt.output_dir + "_critic",
+            os.path.join(self.strategy.last_hf_ckpt_path, "critic"),
         )
 
-    def save_checkpoint(self, tag, metric_value=None, metric_key=None):
-        args = self.strategy.args
-        if not self.disable_ds_ckpt:
-            self.strategy.save_ckpt(
-                self.critic,
-                os.path.join(args.ckpt.path, "_critic"),
-                tag,
-                args.ckpt.max_num,
-                args.ckpt.max_mem,
-                metric_value=metric_value,
-                metric_key=metric_key,
-            )
-
     def reload_states(self):
-        reload_deepspeed_states(self.critic)
+        self.strategy.reload_optimizer_states(self.critic_optim)
 
     def offload_states(self):
-        offload_deepspeed_states(self.critic)
+        self.strategy.offload_optimizer_states(self.critic_optim)
+
+    def offload_model(self):
+        """Offload model to CPU for rollout phase (hybrid engine mode)."""
+        if isinstance(self.strategy, FSDP2Strategy):
+            self.strategy.offload_model(self.critic)
+
+    def reload_model(self):
+        """Reload model to GPU for forward pass (hybrid engine mode)."""
+        if isinstance(self.strategy, FSDP2Strategy):
+            self.strategy.reload_model(self.critic)

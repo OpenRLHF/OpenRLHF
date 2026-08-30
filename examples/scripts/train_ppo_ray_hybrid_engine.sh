@@ -1,51 +1,52 @@
 set -x
 
+# Resume example (explicit step dir, not /dcp_checkpoint; add --resume_training to restore optimizer):
+# --dcp_checkpoint_from_path /path/to/ckpt/dcp_ckpt/global_step_<N> --resume_training
 python3 -m openrlhf.cli.train_ppo_ray \
-   --ref.num_nodes 1 \
-   --ref.num_gpus_per_node 8 \
-   --reward.num_nodes 1 \
-   --reward.num_gpus_per_node 8 \
-   --critic.num_nodes 1 \
-   --critic.num_gpus_per_node 8 \
-   --actor.num_nodes 1 \
-   --actor.num_gpus_per_node 8 \
-   --vllm.num_engines 4 \
-   --vllm.tensor_parallel_size 2 \
-   --train.colocate_all \
-   --vllm.gpu_memory_utilization 0.5 \
-   --actor.model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
-   --reward.model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
-   --ckpt.output_dir /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
-   --ckpt.path /openrlhf/examples/test_scripts/ckpt/llama3-8b-rlhf \
-   --ckpt.save_hf \
-   --train.batch_size 128 \
-   --rollout.batch_size 1024 \
-   --rollout.n_samples_per_prompt 1 \
-   --train.max_epochs 1 \
-   --data.max_len 2048 \
-   --data.max_samples 100000 \
-   --ds.zero_stage 3 \
-   --ds.param_dtype bf16 \
-   --actor.adam.lr 5e-7 \
-   --critic.adam.lr 9e-6 \
-   --algo.kl.init_coef 0.01 \
-   --data.prompt_dataset OpenRLHF/prompt-collection-v0.1 \
-   --data.input_key context_messages \
-   --data.apply_chat_template \
-   --reward.normalize_enable \
-   --actor.gradient_checkpointing_enable \
-   --ds.packing_samples \
-   --vllm.sync_backend nccl \
-   --vllm.enforce_eager \
-   --vllm.enable_sleep \
-   --ds.enable_sleep \
-   --train.dynamic_batch_enable \
-   --train.max_tokens_per_gpu 16384 \
-   --algo.advantage.is_correction_enable
+   --ref_num_nodes 1 \
+   --ref_num_gpus_per_node 8 \
+   --reward_num_nodes 1 \
+   --reward_num_gpus_per_node 8 \
+   --critic_num_nodes 1 \
+   --critic_num_gpus_per_node 8 \
+   --actor_num_nodes 1 \
+   --actor_num_gpus_per_node 8 \
+   --vllm_num_engines 4 \
+   --vllm_tensor_parallel_size 2 \
+   --colocate_all_models \
+   --vllm_gpu_memory_utilization 0.5 \
+   --model_name_or_path OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_model_name_or_path OpenRLHF/Llama-3-8b-rm-700k \
+   --ckpt_save_path /openrlhf/examples/test_scripts/final/llama3-8b-rlhf \
+   --save_hf_ckpt \
+   --train_batch_size 128 \
+   --rollout_batch_size 1024 \
+   --n_samples_per_prompt 1 \
+   --max_epochs 1 \
+   --max_len 2048 \
+   --max_new_tokens 1024 \
+   --max_samples 100000 \
+   --param_dtype bf16 \
+   --actor_learning_rate 5e-7 \
+   --critic_learning_rate 9e-6 \
+   --init_kl_coef 0.01 \
+   --prompt_data OpenRLHF/prompt-collection-v0.1 \
+   --input_key context_messages \
+   --apply_chat_template \
+   --normalize_reward \
+   --gradient_checkpointing \
+   --packing_samples \
+   --vllm_sync_backend nccl \
+   --enforce_eager \
+   --vllm_enable_sleep \
+   --fsdp2_enable_sleep \
+   --use_dynamic_batch \
+   --train_max_tokens_per_gpu 16384 \
+   --enable_vllm_is_correction
 
-# Enable tensor parallelism for DeepSpeed
-#    --ds.tensor_parallel_size 2 \
+# Enable tensor parallelism for FSDP2
+#    --fsdp2_tp_size 2 \
 
 # Enable Ring-Attention
-#    --ds.ring_attn_size 4 \
-#    --ds.ring_attn_head_stride 2 \
+#    --fsdp2_cp_size 4 \
+#    --ring_head_stride 2 \

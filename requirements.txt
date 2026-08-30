@@ -2,14 +2,13 @@ accelerate
 aiohttp
 bitsandbytes
 datasets
-deepspeed==0.19.5
+
 einops
 flash-attn==2.8.3
 grpcio>=1.74.0
 huggingface_hub>=1.0.0
 isort
 jsonlines
-loralib
 optimum
 optree>=0.15.0
 packaging

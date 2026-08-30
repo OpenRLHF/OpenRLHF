@@ -4,10 +4,10 @@
 #
 # Key techniques:
 # - REINFORCE++-baseline with batch advantage normalization
-# - Clip-Higher (--actor.eps_clip_low_high 0.2 0.27) for exploration
+# - Clip-Higher (--eps_clip_low_high 0.2 0.27) for exploration
 # - Dynamic Sampling (--dynamic_filtering) to reduce noise
-# - KL-regularized trust regions (--algo.kl.use_loss --algo.kl.estimator k2)
-# - TIS/ICEPOP/MIS (--algo.advantage.is_correction_type) for importance sampling correction
+# - KL-regularized trust regions (--use_kl_loss --kl_estimator k2)
+# - TIS/ICEPOP/MIS (--vllm_is_correction_type) for importance sampling correction
 # - Stop Properly Penalty (--stop_properly_penalty_coef) for truncated samples
 #
 # ProRL v2 achieves state-of-the-art performance among 1.5B reasoning models
@@ -27,79 +27,76 @@ SAVE_PATH="${WORK_DIR}/exp/DeepSeek-R1-Qwen-1.5B-PRORLV2"
 REWARD_FUNC_PATH="${WORK_DIR}/examples/python/math_reward_func.py"
 
 python3 -m openrlhf.cli.train_ppo_ray \
-   --ref.num_nodes 1 \
-   --ref.num_gpus_per_node 8 \
-   --actor.num_nodes 1 \
-   --actor.num_gpus_per_node 8 \
-   --vllm.num_engines 8 \
-   --vllm.tensor_parallel_size 1 \
-   --train.colocate_all \
-   --vllm.gpu_memory_utilization 0.75 \
-   --algo.kl.init_coef 1e-4 \
-   --algo.advantage.gamma 1.0 \
-   --algo.kl.use_loss \
-   --algo.kl.estimator k2 \
-   --algo.advantage.estimator reinforce_baseline \
-   --algo.dynamic_filtering_enable \
-   --algo.dynamic_filtering_range 0 1 \
-   --actor.eps_clip_low_high 0.2 0.27 \
-   --actor.model_name_or_path ${MODEL_PATH} \
-   --reward.remote_url ${REWARD_FUNC_PATH} \
-   --ckpt.output_dir ${SAVE_PATH} \
-   --ckpt.path "${SAVE_PATH}/ckpt" \
-   --ckpt.save_steps 5 \
-   --ckpt.save_hf \
-   --train.batch_size 1024 \
-   --rollout.batch_size 512 \
-   --rollout.n_samples_per_prompt 16 \
-   --train.dynamic_batch_enable \
-   --train.num_episodes 100 \
-   --data.max_len 9216 \
-   --rollout.max_new_tokens 8192 \
-   --ds.zero_stage 3 \
-   --ds.param_dtype bf16 \
-   --actor.adam.lr 1e-6 \
-   --data.prompt_dataset ${DATASET_PATH} \
-   --data.input_key prompt \
-   --data.label_key label \
-   --eval.dataset OpenRLHF/aime-2024 \
-   --eval.steps 5 \
-   --eval.temperature 1.0 \
-   --eval.n_samples_per_prompt 4 \
-   --data.apply_chat_template \
-   --actor.gradient_checkpointing_enable \
-   --ds.packing_samples \
-   --vllm.sync_backend nccl \
-   --vllm.enforce_eager \
-   --vllm.enable_sleep \
-   --ds.enable_sleep \
-   --algo.advantage.is_correction_enable \
-   --algo.advantage.is_correction_threshold 0.5 5.0 \
-   --algo.advantage.is_correction_type icepop \
-   --train.max_tokens_per_gpu 32768 \
-   --reward.stop_properly_penalty_coef 0.0
+   --ref_num_nodes 1 \
+   --ref_num_gpus_per_node 8 \
+   --actor_num_nodes 1 \
+   --actor_num_gpus_per_node 8 \
+   --vllm_num_engines 8 \
+   --vllm_tensor_parallel_size 1 \
+   --colocate_all_models \
+   --vllm_gpu_memory_utilization 0.75 \
+   --init_kl_coef 1e-4 \
+   --gamma 1.0 \
+   --use_kl_loss \
+   --kl_estimator k2 \
+   --advantage_estimator reinforce_baseline \
+   --dynamic_filtering \
+   --dynamic_filtering_reward_range 0 1 \
+   --eps_clip_low_high 0.2 0.27 \
+   --model_name_or_path ${MODEL_PATH} \
+   --remote_rm_url ${REWARD_FUNC_PATH} \
+   --ckpt_save_path ${SAVE_PATH} \
+   --save_steps 5 \
+   --save_hf_ckpt \
+   --train_batch_size 1024 \
+   --rollout_batch_size 512 \
+   --n_samples_per_prompt 16 \
+   --use_dynamic_batch \
+   --num_episodes 100 \
+   --max_new_tokens 8192 \
+   --max_len 9216 \
+   --param_dtype bf16 \
+   --actor_learning_rate 1e-6 \
+   --prompt_data ${DATASET_PATH} \
+   --input_key prompt \
+   --label_key label \
+   --eval_dataset OpenRLHF/aime-2024 \
+   --eval_steps 5 \
+   --eval_temperature 1.0 \
+   --eval_n_samples_per_prompt 4 \
+   --apply_chat_template \
+   --gradient_checkpointing \
+   --packing_samples \
+   --vllm_sync_backend nccl \
+   --enforce_eager \
+   --vllm_enable_sleep \
+   --fsdp2_enable_sleep \
+   --enable_vllm_is_correction \
+   --vllm_is_truncated_threshold 0.5 5.0 \
+   --vllm_is_correction_type icepop \
+   --train_max_tokens_per_gpu 32768 \
+   --stop_properly_penalty_coef 0.0
 
 # ProRL v2 Key Parameters:
 #
 # REINFORCE++-baseline with batch advantage normalization:
-#   --algo.advantage.estimator reinforce_baseline
+#   --advantage_estimator reinforce_baseline
 #
 # TIS/ICEPOP/MIS (Importance Sampling Correction):
-#   --algo.advantage.is_correction_enable: Enable vLLM importance sampling correction for off-policy rollouts
-#   --algo.advantage.is_correction_threshold 0.5 5.0: IS truncation interval [low, high]
-#   --algo.advantage.is_correction_type icepop: Set IS coefficients outside [low, high] to 0 (instead of clamp)
+#   --enable_vllm_is_correction: Enable vLLM importance sampling correction for off-policy rollouts
+#   --vllm_is_truncated_threshold 0.5 5.0: IS truncation interval [low, high]
+#   --vllm_is_correction_type icepop: Set IS coefficients outside [low, high] to 0 (instead of clamp)
 #
 # Length Penalty (Two options, can be used together):
 #
 # Option 1: Overlong Penalty (Scheduled Cosine Length Penalty based on response length)
-#   --reward.overlong_buffer_len 6144: Buffer length before max, penalty starts when response > (max_new_tokens - overlong_buffer_len)
-#   --reward.overlong_penalty_factor 1.0: Maximum penalty factor for overlong outputs
+#   --overlong_buffer_len 6144: Buffer length before max, penalty starts when response > (max_new_tokens - overlong_buffer_len)
+#   --overlong_penalty_factor 1.0: Maximum penalty factor for overlong outputs
 #   Formula: penalty = -min(exceed_len, buffer_len) / buffer_len * penalty_factor
 #
 # Option 2: Stop Properly Penalty (based on vLLM finish_reason == "length")
-#   --reward.stop_properly_penalty_coef 0.0: Penalty coefficient [0,1] for truncated samples
+#   --stop_properly_penalty_coef 0.0: Penalty coefficient [0,1] for truncated samples
 #   Truncated sample rewards are scaled by this coefficient (0.0 = zero reward for truncated)
-#   This encourages the model to generate complete responses within max_tokens limit
 #
 # Additional options you may try:
-#   --train.async_enable                    # Enable async training for higher throughput
+#   --async_train                    # Enable async training for higher throughput

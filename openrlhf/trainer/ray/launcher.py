@@ -11,7 +11,8 @@ from tqdm import tqdm
 
 from openrlhf.models import Actor, get_llm_for_sequence_regression
 from openrlhf.trainer.ray.utils import ray_noset_visible_devices
-from openrlhf.utils.deepspeed import DeepspeedStrategy
+from openrlhf.utils import convert_to_torch_dtype
+from openrlhf.utils.fsdp2.strategy import FSDP2Strategy
 
 
 class BaseDistributedActor:
@@ -52,7 +53,7 @@ class BaseDistributedActor:
 
 
 class BaseModelActor(BaseDistributedActor):
-    def _setup_distributed(self, strategy: DeepspeedStrategy):
+    def _setup_distributed(self, strategy: FSDP2Strategy):
         # configure strategy
         self.strategy = strategy
         strategy.setup_distributed()
@@ -103,25 +104,32 @@ class BaseModelActor(BaseDistributedActor):
 
 @ray.remote(num_gpus=1)
 class ReferenceModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain):
         self._setup_distributed(strategy)
         model = Actor(
             pretrain,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.ref.offload),
-            packing_samples=strategy.args.ds.packing_samples,
-            temperature=strategy.args.rollout.temperature,
-            use_liger_kernel=strategy.args.ds.use_liger_kernel,
+            attn_implementation=strategy.args.attn_implementation,
+            torch_dtype=convert_to_torch_dtype(strategy.args.param_dtype),
+            use_liger_kernel=strategy.args.use_liger_kernel,
+            packing_samples=strategy.args.packing_samples,
+            temperature=strategy.args.temperature,
         )
         strategy.print(model)
 
-        if strategy.args.ref.offload:
-            model._offload = True
-
-        self.model = self.strategy.prepare(model)
+        # Reference model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+        self.model = self.strategy.apply_parallelism(
+            model,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
+        self.strategy.model_to_empty(
+            self.model,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
+        self.strategy.load_hf_checkpoint(
+            self.model,
+            pretrain,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
         self.model.eval()
 
     def forward(
@@ -131,17 +139,8 @@ class ReferenceModelActor(BaseModelActor):
         attention_mask: Optional[torch.Tensor] = None,
         return_output=False,
         packed_seq_lens: Optional[list[int]] = None,
-        mm_train_inputs_list=None,
     ) -> torch.Tensor:
         device = torch.cuda.current_device()
-
-        # VLM: merge pre-processed multimodal inputs from all samples in batch
-        mm_inputs = {}
-        if mm_train_inputs_list and getattr(self.model, "is_vlm", False):
-            from openrlhf.utils.vlm_utils import merge_mm_train_inputs
-
-            mm_inputs = merge_mm_train_inputs(mm_train_inputs_list, device)
-
         with torch.no_grad():
             log_probs = self.model(
                 sequences.to(device),
@@ -149,35 +148,40 @@ class ReferenceModelActor(BaseModelActor):
                 attention_mask.to(device),
                 ring_attn_group=self.strategy.ring_attn_group,
                 packed_seq_lens=packed_seq_lens,
-                **mm_inputs,
             )
         return log_probs.to("cpu")
 
 
 @ray.remote(num_gpus=1)
 class RewardModelActor(BaseModelActor):
-    def init_model_from_pretrained(self, strategy: DeepspeedStrategy, pretrain):
+    def init_model_from_pretrained(self, strategy: FSDP2Strategy, pretrain):
         self._setup_distributed(strategy)
         model = get_llm_for_sequence_regression(
             pretrain,
             "reward",
-            normalize_reward=strategy.args.reward.normalize_enable,
-            attn_implementation=strategy.args.ds.attn_implementation,
-            experts_implementation=strategy.args.ds.experts_implementation,
-            param_dtype=strategy.args.ds.param_dtype,  # default: bf16
-            load_in_4bit=strategy.args.ds.load_in_4bit,
-            ds_config=strategy.get_ds_eval_config(offload=strategy.args.reward.offload),
-            value_head_prefix=strategy.args.ds.value_head_prefix,
-            packing_samples=strategy.args.ds.packing_samples,
+            normalize_reward=strategy.args.normalize_reward,
+            attn_implementation=strategy.args.attn_implementation,
+            torch_dtype=convert_to_torch_dtype(strategy.args.param_dtype),
+            packing_samples=strategy.args.packing_samples,
         )
         strategy.print(model)
-        strategy.print("reward normalization status: {}".format(strategy.args.reward.normalize_enable))
-        strategy.print("mean: {}, std {}".format(model.mean, model.std))
+        strategy.print("reward normalization status: {}".format(strategy.args.normalize_reward))
 
-        if strategy.args.reward.offload:
-            model._offload = True
-
-        self.model = self.strategy.prepare(model)
+        # Reward model is inference-only; cpu_offload controls FSDP2 CPUOffloadPolicy.
+        self.model = self.strategy.apply_parallelism(
+            model,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
+        self.strategy.model_to_empty(
+            self.model,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
+        self.strategy.load_hf_checkpoint(
+            self.model,
+            pretrain,
+            force_cpu_offload=strategy.args.ref_reward_offload,
+        )
+        strategy.print("mean: {}, std {}".format(getattr(self.model, "mean", None), getattr(self.model, "std", None)))
         self.model.eval()
 
     def forward(
@@ -228,7 +232,7 @@ class RayActorGroup:
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.ray_actor_type = ray_actor_type
-        # duplicate actors is ring_attn_size * tensor_parallel_size
+        # duplicate actors is cp_size * tp_size
         self.duplicate_actors = duplicate_actors
 
         # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
@@ -355,19 +359,17 @@ class RayActorGroup:
         if total_length % effective_actors != 0:
             chunk_size += 1
 
-        # Pre-slice data before ray.put so each worker only receives its chunk.
-        # This avoids transferring the full batch to every node (critical at scale).
+        all_data_ref = ray.put(kwargs)
+
         refs = []
         for chunk_idx in range(effective_actors):
             start_idx = chunk_idx * chunk_size
             end_idx = min((chunk_idx + 1) * chunk_size, total_length)
 
-            chunk_data = {key: value[start_idx:end_idx] for key, value in kwargs.items()}
-            chunk_ref = ray.put(chunk_data)
-
             for j in range(self.duplicate_actors):
                 actor_idx = chunk_idx * self.duplicate_actors + j
                 actor = self._actor_handlers[actor_idx]
-                refs.append(actor.execute_batch.remote(method_name, chunk_ref, 0, end_idx - start_idx))
+
+                refs.append(actor.execute_batch.remote(method_name, all_data_ref, start_idx, end_idx))
 
         return refs

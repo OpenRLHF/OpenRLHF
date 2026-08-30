@@ -26,7 +26,7 @@ class DPOTrainer(ABC):
         beta (float, defaults to 0.01): Coefficient for regularizing the preference loss.
         max_epochs (int, defaults to 2): Maximum number of training epochs.
         save_hf_ckpt (bool): Whether to save huggingface-format model weight.
-        disable_ds_ckpt (bool): Whether not to save deepspeed-format model weight. (Deepspeed model weight is used for training recovery)
+        disable_fsdp2_ckpt (bool): Whether to disable FSDP2 distributed checkpoints (used for training recovery).
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class DPOTrainer(ABC):
         beta=0.01,
         max_epochs: int = 2,
         save_hf_ckpt: bool = False,
-        disable_ds_ckpt: bool = False,
+        disable_fsdp2_ckpt: bool = False,
     ) -> None:
         super().__init__()
         self.strategy = strategy
@@ -58,34 +58,34 @@ class DPOTrainer(ABC):
         self.tokenizer = tokenizer
         self.args = strategy.args
         self.save_hf_ckpt = save_hf_ckpt
-        self.disable_ds_ckpt = disable_ds_ckpt
+        self.disable_fsdp2_ckpt = disable_fsdp2_ckpt
 
         self.beta = beta
-        self.loss_fn = DPOLoss(self.beta, self.args.model.label_smoothing, self.args.model.ipo_enable)
+        self.loss_fn = DPOLoss(self.beta, self.args.label_smoothing, self.args.ipo)
 
         # Mixtral 8*7b
-        self.aux_loss = self.args.model.aux_loss_coef > 1e-8
+        self.aux_loss = self.args.aux_loss_coef > 1e-8
 
         # NLL loss
-        self.nll_loss = self.args.model.nll_loss_coef > 1e-8
+        self.nll_loss = self.args.nll_loss_coef > 1e-8
 
         # packing samples
-        self.packing_samples = strategy.args.ds.packing_samples
+        self.packing_samples = strategy.args.packing_samples
 
         # wandb/tensorboard setting
         self._wandb = None
         self._tensorboard = None
-        if self.strategy.args.logger.wandb.key and self.strategy.is_rank_0():
+        if self.strategy.args.use_wandb and self.strategy.is_rank_0():
             import wandb
 
             self._wandb = wandb
             if not wandb.api.api_key:
-                wandb.login(key=strategy.args.logger.wandb.key)
+                wandb.login(key=strategy.args.use_wandb)
             wandb.init(
-                entity=strategy.args.logger.wandb.org,
-                project=strategy.args.logger.wandb.project,
-                group=strategy.args.logger.wandb.group,
-                name=strategy.args.logger.wandb.run_name,
+                entity=strategy.args.wandb_org,
+                project=strategy.args.wandb_project,
+                group=strategy.args.wandb_group,
+                name=strategy.args.wandb_run_name,
                 config=strategy.args.__dict__,
                 reinit=True,
             )
@@ -96,11 +96,11 @@ class DPOTrainer(ABC):
             wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
         # Initialize TensorBoard writer if wandb is not available
-        if self.strategy.args.logger.tensorboard_dir and self._wandb is None and self.strategy.is_rank_0():
+        if self.strategy.args.use_tensorboard and self._wandb is None and self.strategy.is_rank_0():
             from torch.utils.tensorboard import SummaryWriter
 
-            os.makedirs(self.strategy.args.logger.tensorboard_dir, exist_ok=True)
-            log_dir = os.path.join(self.strategy.args.logger.tensorboard_dir, strategy.args.logger.wandb.run_name)
+            os.makedirs(self.strategy.args.use_tensorboard, exist_ok=True)
+            log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
     def fit(self, args, consumed_samples=0, num_update_steps_per_epoch=None):
@@ -114,15 +114,15 @@ class DPOTrainer(ABC):
             )
 
         # get eval and save steps
-        if args.eval.steps == -1:
-            args.eval.steps = num_update_steps_per_epoch  # Evaluate once per epoch
-        if args.ckpt.save_steps == -1:
-            args.ckpt.save_steps = float("inf")  # do not save ckpt
+        if args.eval_steps == -1:
+            args.eval_steps = num_update_steps_per_epoch  # Evaluate once per epoch
+        if args.save_steps == -1:
+            args.save_steps = float("inf")  # do not save ckpt
 
         # Restore step and start_epoch
-        step = consumed_samples // args.train.batch_size * self.strategy.accumulated_gradient + 1
-        start_epoch = consumed_samples // args.train.batch_size // num_update_steps_per_epoch
-        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train.batch_size)
+        step = consumed_samples // args.train_batch_size * self.strategy.accumulated_gradient + 1
+        start_epoch = consumed_samples // args.train_batch_size // num_update_steps_per_epoch
+        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train_batch_size)
 
         epoch_bar = tqdm(
             range(start_epoch, self.epochs),
@@ -173,13 +173,10 @@ class DPOTrainer(ABC):
                 if not self.nll_loss:
                     nll_loss = 0
 
-                loss = (
-                    preference_loss
-                    + aux_loss * self.args.model.aux_loss_coef
-                    + nll_loss * self.args.model.nll_loss_coef
-                )
-                self.strategy.backward(loss, self.model, self.optimizer)
-                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
+                loss = preference_loss + aux_loss * self.args.aux_loss_coef + nll_loss * self.args.nll_loss_coef
+                self.strategy.backward(loss, self.model)
+                grad_norm = self.strategy.get_grad_norm(self.model)
+                self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, grad_norm=grad_norm)
 
                 acc = (chosen_reward > reject_reward).float().mean().item()
                 acc_sum += acc
@@ -191,7 +188,7 @@ class DPOTrainer(ABC):
                     "chosen_reward": chosen_reward.mean().item(),
                     "reject_reward": reject_reward.mean().item(),
                     "lr": self.scheduler.get_last_lr()[0],
-                    "grad_norm": self.strategy.get_grad_norm(self.model),
+                    "grad_norm": grad_norm,
                 }
                 if self.nll_loss:
                     logs_dict["nll_loss"] = nll_loss.item()
@@ -207,7 +204,7 @@ class DPOTrainer(ABC):
                     loss_sum = 0
                     acc_sum = 0
                     global_step = step // self.strategy.accumulated_gradient
-                    client_states = {"consumed_samples": global_step * args.train.batch_size}
+                    client_states = {"consumed_samples": global_step * args.train_batch_size}
                     self.save_logs_and_checkpoints(args, global_step, step_bar, logs_dict, client_states)
 
                 step += 1
@@ -220,10 +217,8 @@ class DPOTrainer(ABC):
             self._tensorboard.close()
 
     # logs/checkpoints/evaluate
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict=None, client_states=None):
-        logs_dict = logs_dict or {}
-        client_states = client_states or {}
-        if global_step % args.logger.logging_steps == 0:
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+        if global_step % args.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():
                 logs = {"train/%s" % k: v for k, v in {**logs_dict, "global_step": global_step}.items()}
@@ -234,22 +229,31 @@ class DPOTrainer(ABC):
                     self._tensorboard.add_scalar(f"train/{k}", v, global_step)
 
         # eval
-        if global_step % args.eval.steps == 0 and self.eval_dataloader is not None:
+        if global_step % args.eval_steps == 0 and self.eval_dataloader is not None:
             # do eval when len(dataloader) > 0, avoid zero division in eval.
             if len(self.eval_dataloader) > 0:
                 self.evaluate(self.eval_dataloader, global_step)
 
         # save ckpt
         # TODO: save best model on dev, use loss/perplexity on whole dev dataset as metric
-        if global_step % args.ckpt.save_steps == 0:
-            tag = f"global_step{global_step}"
-            if not self.disable_ds_ckpt:
-                self.strategy.save_ckpt(
-                    self.model.model, args.ckpt.path, tag, args.ckpt.max_num, args.ckpt.max_mem, client_states
+        if global_step % args.save_steps == 0:
+            tag = f"global_step_{global_step}"
+            step_dir = os.path.join(self.strategy.dcp_ckpt_path, tag)
+            any_checkpoint_saved = False
+            if not self.disable_fsdp2_ckpt:
+                self.strategy.save_dcp_checkpoint(
+                    self.model.model,
+                    os.path.join(step_dir, "dcp_checkpoint"),
+                    client_state=client_states,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
                 )
+                any_checkpoint_saved = True
             if self.save_hf_ckpt:
-                save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
-                self.strategy.save_model(self.model, self.tokenizer, save_path)
+                self.strategy.save_hf_checkpoint(self.model, self.tokenizer, os.path.join(step_dir, "hf_checkpoint"))
+                any_checkpoint_saved = True
+            if any_checkpoint_saved:
+                self.strategy.cleanup_old_checkpoints(tag)
 
     def evaluate(self, eval_dataloader, steps=0):
         self.model.eval()
@@ -319,7 +323,9 @@ class DPOTrainer(ABC):
             ring_attn_group=self.strategy.ring_attn_group,
         )
 
-        all_logps_sum, all_logps_mean = self._get_batch_logps(log_probs, att_masks, prompt_id_lens)
+        all_logps_sum, all_logps_mean = self._get_batch_logps(
+            log_probs, att_masks, prompt_id_lens, average_log_prob=False
+        )
         chosen_logps = all_logps_sum[: chosen_ids.shape[0]]
         rejected_logps = all_logps_sum[chosen_ids.shape[0] :]
         aux_loss = output.aux_loss if "aux_loss" in output else []
@@ -359,18 +365,22 @@ class DPOTrainer(ABC):
 
     def _get_batch_logps(
         self,
-        per_token_logps: torch.FloatTensor,
+        per_token_logps: torch.LongTensor,
         attention_mask,
         prompt_id_lens,
+        average_log_prob: bool = False,
     ) -> torch.FloatTensor:
-        """Compute the summed and averaged log probabilities of the given labels under the given logits.
+        """Compute the log probabilities of the given labels under the given logits.
 
         Args:
             per_token_logps: Per token log probabilities. Shape: (batch_size, sequence_length)
+            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
 
         Returns:
-            (sum, mean) tensors of shape (batch_size,) over the non-masked tokens.
+            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
         """
+        assert average_log_prob == False
+
         loss_masks = attention_mask.clone().bool()
         # mask prompts
         for mask, source_len in zip(loss_masks, prompt_id_lens):
