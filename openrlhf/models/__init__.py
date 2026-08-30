@@ -7,6 +7,7 @@ from .loss import (
     PolicyLoss,
     SFTLoss,
     ValueLoss,
+    aggregate_loss,
 )
 from .model import get_llm_for_sequence_regression
 
@@ -19,5 +20,6 @@ __all__ = [
     "PairWiseLoss",
     "PolicyLoss",
     "ValueLoss",
+    "aggregate_loss",
     "get_llm_for_sequence_regression",
 ]

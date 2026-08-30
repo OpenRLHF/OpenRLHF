@@ -383,7 +383,9 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     if len(ground_truth_elems) > 1 and (
         ground_truth_normalized[0] != given_normalized[0] or ground_truth_normalized[-1] != given_normalized[-1]
     ):
-        is_correct = False
+        # Bracket/delimiter mismatch on a tuple answer: reject outright. Falling
+        # through would let the element-wise check below silently overwrite this.
+        return False
     if len(ground_truth_elems) != len(given_elems):
         is_correct = False
     else:

@@ -12,7 +12,7 @@
 #SBATCH --overcommit               # needed for pytorch
 
 # project settings
-OPENRLHF_PATH=<OPENRLHF_ROOT_PATH>
+OPENRLHF_PATH="<OPENRLHF_ROOT_PATH>"
 MOUNT="$OPENRLHF_PATH:/openrlhf,$HOME/.cache:/root/.cache"
 IMAGE_NAME="nvcr.io/nvidia/pytorch:25.11-py3"
 RAY_VERSION=2.12.0

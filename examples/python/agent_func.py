@@ -8,7 +8,7 @@ from openrlhf.utils.agent import AgentInstanceBase, MultiTurnAgentExecutor
 
 # A simple n-step random environment
 class AgentInstance(AgentInstanceBase):
-    async def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         self.step_idx = 0
         self.max_steps = random.randint(1, 3)  # 1-3 steps
 

@@ -151,3 +151,7 @@ core
 */checkpoint/*
 exp
 wandb
+.claude/*
+!.claude/skills
+!.claude/skills/**
+*tmp*
