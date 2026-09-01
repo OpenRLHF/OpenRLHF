@@ -1,4 +1,5 @@
 import itertools
+import math
 import time
 from datetime import timedelta
 from typing import List, Tuple
@@ -69,11 +70,28 @@ class RemoteExperienceMaker:
                 samples_list.append(concat_samples)
         else:
             batch_size = self.args.rollout.micro_batch_size
-            for i in range(0, len(rollout_samples), batch_size):
-                concat_samples = Experience.concat_experiences(
-                    rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
+            groups = [self.actor_model_group, self.critic_model_group, self.initial_model_group]
+            if rollout_samples[0].rewards is None:
+                groups.append(self.reward_model_group)
+            group_lcm = math.lcm(
+                *(len(group._actor_handlers) // group.duplicate_actors for group in groups if group is not None)
+            )
+            if len(rollout_samples) % group_lcm != 0:
+                raise ValueError(
+                    "Non-dynamic rollout sample count must be divisible by all effective actor groups: "
+                    f"sample_count={len(rollout_samples)}, group_lcm={group_lcm}"
                 )
-                samples_list.append(concat_samples)
+
+            # Equal LCM shards give every effective actor the same calls and samples.
+            # Splitting only inside each shard preserves all samples without padding.
+            samples_per_shard = len(rollout_samples) // group_lcm
+            for shard_start in range(0, len(rollout_samples), samples_per_shard):
+                shard_end = shard_start + samples_per_shard
+                for i in range(shard_start, shard_end, batch_size):
+                    concat_samples = Experience.concat_experiences(
+                        rollout_samples[i : min(i + batch_size, shard_end)], self.tokenizer.pad_token_id
+                    )
+                    samples_list.append(concat_samples)
         return samples_list
 
     @torch.no_grad()

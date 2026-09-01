@@ -319,6 +319,7 @@ class RayActorGroup:
     def async_run_method_batch(self, method_name, **kwargs):
         """Run method on all actors with batched input data asynchronously using round-robin scheduling.
         Each actor processes one chunk of data at a time. Actors in the same ring / tensor parallel group process the same chunk.
+        The input length must be divisible by the number of effective actors.
 
         Args:
             method_name (str): Name of the method to run
@@ -351,9 +352,12 @@ class RayActorGroup:
                 f"Insufficient batch size for async_run_method_batch: total_length={total_length}, "
                 f"effective_actors={effective_actors}"
             )
-        chunk_size = total_length // effective_actors
         if total_length % effective_actors != 0:
-            chunk_size += 1
+            raise ValueError(
+                f"Batch size must be divisible by effective actors: total_length={total_length}, "
+                f"effective_actors={effective_actors}"
+            )
+        chunk_size = total_length // effective_actors
 
         # Pre-slice data before ray.put so each worker only receives its chunk.
         # This avoids transferring the full batch to every node (critical at scale).
