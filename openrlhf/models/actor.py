@@ -265,6 +265,10 @@ class Actor(nn.Module):
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, **mm_inputs)
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
+        # Scale once here so the entropy below and the log probs describe the same
+        # temperature-scaled policy that the rollout sampled from.
+        if self.temperature != 1.0:
+            output["logits"].div_(self.temperature)
 
         if return_entropy:
             assert return_output
@@ -282,7 +286,7 @@ class Actor(nn.Module):
                 )
             return output
 
-        log_probs = log_probs_from_logits(output["logits"], rolled_sequences, temperature=self.temperature)
+        log_probs = log_probs_from_logits(output["logits"], rolled_sequences)
 
         if self.packing_samples:
             log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
