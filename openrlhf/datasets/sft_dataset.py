@@ -6,9 +6,7 @@ from torch.utils.data import Dataset
 from openrlhf.utils.utils import zero_pad_sequences
 
 
-def preprocess_data(
-    data, input_template=None, input_key="input", output_key=None, apply_chat_template=None
-):
+def preprocess_data(data, input_template=None, input_key="input", output_key=None, apply_chat_template=None):
     if apply_chat_template:
         if output_key:
             prompt_message = data[input_key]
@@ -152,8 +150,13 @@ class SFTDataset(Dataset):
                 add_special_tokens=False,
             )
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-            # filter the sample whose length is greater than max_length (2 for answer length)
-            if not prompt or not response or prompt_ids_len >= self.max_length - 2:
+            # Multi-turn training can use earlier answers even when the final prompt is truncated.
+            has_trainable_response = (
+                any(start_idx < self.max_length - 2 for start_idx, _ in response_ranges)
+                if self.multiturn
+                else prompt_ids_len < self.max_length - 2
+            )
+            if not prompt or not response or not has_trainable_response:
                 prompt = None
         else:
             prompt_ids_len = 0
