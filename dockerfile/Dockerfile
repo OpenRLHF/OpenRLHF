@@ -14,11 +14,11 @@ RUN sudo su -
 RUN DEBIAN_FRONTEND=noninteractive apt install -y tzdata
 
 RUN apt-get -y install build-essential git python3-dev python3-pip libopenexr-dev libxi-dev libglfw3-dev libglew-dev libomp-dev libxinerama-dev libxcursor-dev gdb
-RUN pip uninstall xgboost transformer_engine flash_attn pynvml opencv-python-headless -y
-# vLLM 0.22.1 pulls in its matching torch==2.11.0 (cu13) build.
-RUN pip install vllm==0.22.1
-# Build flash-attn 2.8.3 against the torch 2.11 pulled in above (no prebuilt
-# torch2.11 x86_64 wheel is published yet). MAX_JOBS caps build memory usage.
+RUN pip uninstall xgboost transformer_engine torchao flash_attn pynvml opencv-python-headless -y
+# Keep the training and rollout stacks on one resolver-selected PyTorch/CUDA ABI.
+RUN pip install vllm==0.27.1 deepspeed==0.19.5 transformers==5.15.0
+# Rebuild the existing FlashAttention dependency after vLLM has installed its
+# exact PyTorch dependency, so the extension uses the same ABI.
 RUN MAX_JOBS=8 pip install flash-attn==2.8.3 --no-build-isolation
 
 COPY docker-entrypoint.sh .

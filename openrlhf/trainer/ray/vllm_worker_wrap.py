@@ -48,9 +48,6 @@ class WorkerWrap:
         self.model_runner.model.load_weights(weights=[(name, weight)])
 
         del weight
-        # TODO: should we empty cache if all weights have updated?
-        # if empty_cache:
-        #     torch.cuda.empty_cache()
 
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
         import torch

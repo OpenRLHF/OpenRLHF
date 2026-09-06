@@ -100,26 +100,6 @@ class Experience:
         return self
 
     @staticmethod
-    def select(experiences: List["Experience"], fields: List[str]) -> List["Experience"]:
-        """Select specific fields from a list of Experience instances to create new Experience instances.
-
-        Args:
-            experiences: List of Experience instances
-            fields: List of field names to select
-
-        Returns:
-            A list of new Experience instances containing only the selected fields
-        """
-        new_experiences = []
-        for exp in experiences:
-            new_exp = Experience()
-            for field in fields:
-                if hasattr(exp, field):
-                    setattr(new_exp, field, getattr(exp, field))
-            new_experiences.append(new_exp)
-        return new_experiences
-
-    @staticmethod
     def _merge_item(items: List, pad_value: int = 0) -> Union[torch.Tensor, list, dict, Any]:
         """Merge a list of items into a single item.
         Recursively merge tensors, lists and dicts.
@@ -299,5 +279,5 @@ def balance_experiences(experiences, args):
     if len(last_half) > len(first_half):
         interval_items.append(last_half[0])
 
-    interval_merged = list(zip(*interval_items))
-    return [make_experience_batch(items) for items in interval_merged]
+    interval_merged = itertools.zip_longest(*interval_items)
+    return [make_experience_batch([item for item in items if item is not None]) for items in interval_merged]

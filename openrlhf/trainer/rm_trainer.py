@@ -211,7 +211,9 @@ class RewardModelTrainer(ABC):
             self._tensorboard.close()
 
     # logs/checkpoints/evaluate
-    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict={}, client_states={}):
+    def save_logs_and_checkpoints(self, args, global_step, step_bar, logs_dict=None, client_states=None):
+        logs_dict = logs_dict or {}
+        client_states = client_states or {}
         if global_step % args.logger.logging_steps == 0:
             # wandb
             if self._wandb is not None and self.strategy.is_rank_0():

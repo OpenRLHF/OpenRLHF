@@ -50,9 +50,9 @@ def train(args):
         ray.get(pg.ready())
 
     # init vLLM engine for text generation
+    max_len = args.data.max_len
     vllm_engines = None
     if args.vllm.num_engines is not None and args.vllm.num_engines > 0:
-        max_len = args.data.max_len
         if args.train.colocate_all and not args.train.async_enable:
             assert (
                 args.actor.num_nodes * args.actor.num_gpus_per_node

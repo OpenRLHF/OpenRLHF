@@ -519,7 +519,7 @@ class PolicyModelActor(BaseModelActor):
             lora_alpha=strategy.args.ds.lora.alpha,
             target_modules=strategy.args.ds.lora.target_modules,
             lora_dropout=strategy.args.ds.lora.dropout,
-            ds_config=strategy.get_ds_train_config(is_actor=True),
+            ds_config=strategy.get_ds_train_config(),
             packing_samples=strategy.args.ds.packing_samples,
             temperature=strategy.args.rollout.temperature,
             use_liger_kernel=strategy.args.ds.use_liger_kernel,

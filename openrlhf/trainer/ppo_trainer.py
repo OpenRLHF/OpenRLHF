@@ -528,8 +528,10 @@ class PPOTrainer(BasePPOTrainer):
                 )
                 generation_time = time.time() - t_gen_start
                 total_consumed_prompts += prompts_consumed
-                if is_exhausted:
-                    break
+                if not rollout_samples:
+                    if is_exhausted:
+                        break
+                    continue
 
                 # Run PPO update on this batch and bump the global step counter.
                 status, global_step = self.train_step(rollout_samples, global_step)
@@ -562,6 +564,9 @@ class PPOTrainer(BasePPOTrainer):
                     self.save_best_checkpoint(eval_logs, global_step, client_states)
 
                 pbar.update(prompts_consumed)
+
+                if is_exhausted:
+                    break
 
         # Close trackers
         if self.wandb_logger:
