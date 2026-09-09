@@ -1,4 +1,5 @@
 import asyncio
+import os
 from abc import ABC, abstractmethod
 from copy import deepcopy
 
@@ -324,6 +325,11 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         num_servers = len(self.reward_endpoints)
         batch_size = (len(queries_list) + num_servers - 1) // num_servers
         timeout = aiohttp.ClientTimeout(total=180)
+        api_key = os.environ.get("OPENRLHF_RM_API_KEY")
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+            headers["X-Api-Key"] = api_key
 
         tasks = []
         for i, rm in enumerate(self.reward_endpoints):
@@ -339,11 +345,24 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
                 for _ in range(try_max_times):
                     try:
                         async with aiohttp.ClientSession(timeout=timeout) as session:
-                            async with session.post(url, json=data) as response:
+                            async with session.post(url, json=data, headers=headers) as response:
                                 response.raise_for_status()
-                                return await response.json()
+                                result = await response.json()
+                        rewards = result.get("rewards") if isinstance(result, dict) else None
+                        expected = len(data["query"])
+                        if (
+                            not isinstance(rewards, list)
+                            or len(rewards) != expected
+                            or any(isinstance(r, bool) or not isinstance(r, (int, float)) for r in rewards)
+                        ):
+                            raise ValueError(
+                                f"Remote RM returned malformed rewards: expected {expected} numbers, got {rewards!r}"
+                            )
+                        return result
                     except aiohttp.ClientError as e:
                         logger.info(f"Request error, please check: {e}")
+                    except ValueError:
+                        raise
                     except Exception as e:  # pragma: no cover - defensive
                         logger.info(f"Unexpected error, please check: {e}")
                     await asyncio.sleep(1)
