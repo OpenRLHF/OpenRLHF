@@ -17,6 +17,7 @@ def _load_actor_module():
     models_dir = root / "openrlhf" / "models"
 
     # Keep this CPU test importable without DeepSpeed, flash-attn, or peft.
+    inserted_stubs = []
     for name in (
         "deepspeed",
         "flash_attn",
@@ -31,6 +32,7 @@ def _load_actor_module():
             stub = MagicMock()
             stub.__spec__ = importlib.machinery.ModuleSpec(name, None)
             sys.modules[name] = stub
+            inserted_stubs.append(name)
 
     pkg = types.ModuleType(_TEST_PACKAGE)
     pkg.__path__ = [str(models_dir)]
@@ -47,6 +49,10 @@ def _load_actor_module():
             spec.loader.exec_module(module)
     finally:
         torch.compile = original_compile
+        # Drop the import-time stubs so later tests can import the real packages
+        # (a lingering MagicMock "deepspeed" breaks test_deepspeed_save_model).
+        for name in inserted_stubs:
+            del sys.modules[name]
 
     return sys.modules[f"{_TEST_PACKAGE}.actor"]
 
