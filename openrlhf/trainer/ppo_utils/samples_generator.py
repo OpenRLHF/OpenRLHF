@@ -184,10 +184,6 @@ class SamplesGenerator:
                     # Dispatch replacement for filtered prompt.
                     new_prompts, new_labels, new_images, exhausted = _collect_prompt_batch(dataloader_iter, 1)
                     prompts_consumed += len(new_prompts)
-                    if exhausted and not new_prompts:
-                        for remaining_ref in pending_refs:
-                            ray.cancel(remaining_ref)
-                        return [], prompts_consumed, True
                     if new_prompts:
                         new_refs = self._dispatch_prompts_to_vllm(
                             new_prompts, new_labels, images=new_images, **generate_kwargs
