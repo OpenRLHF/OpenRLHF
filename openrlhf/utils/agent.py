@@ -80,6 +80,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         total_reward = 0
         final_scores = 0
         extra_logs = {}
+        is_truncated = False
 
         if sampling_params.logprobs is not None:
             rollout_log_probs = [0.0] * len(current_obs_tokens)
@@ -101,6 +102,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             )
             action_tokens = request_output.outputs[0].token_ids
             action_text = request_output.outputs[0].text
+            is_truncated = request_output.outputs[0].finish_reason == "length"
 
             # Record action range in token space
             action_start = len(current_obs_tokens)
@@ -176,6 +178,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             "observation_tokens": current_obs_tokens,
             "action_ranges": action_ranges,
             "rollout_log_probs": rollout_log_probs,
+            "truncated": is_truncated,
             "extra_logs": extra_logs,
         }
         return final_response
