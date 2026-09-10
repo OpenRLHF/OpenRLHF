@@ -149,6 +149,13 @@ class TestRayEnvVarsDefaults:
             env_vars = _get_ray_init_env_vars()
         assert env_vars["RAY_ENABLE_ZERO_COPY_TORCH_TENSORS"] == "1"
 
+    def test_ccl_log_level_default(self):
+        # CCL_LOG_LEVEL is oneCCL/XCCL's own log-verbosity variable; independent of NCCL_DEBUG.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CCL_LOG_LEVEL", None)
+            env_vars = _get_ray_init_env_vars()
+        assert env_vars["CCL_LOG_LEVEL"] == "warn"
+
 
 # ---------------------------------------------------------------------------
 # Tests: user overrides
@@ -165,6 +172,11 @@ class TestRayEnvVarsUserOverride:
     def test_nccl_debug_user_trace(self):
         env_vars = _get_ray_init_env_vars({"NCCL_DEBUG": "TRACE"})
         assert env_vars["NCCL_DEBUG"] == "TRACE"
+
+    def test_ccl_log_level_user_debug(self):
+        # Same override guarantee as NCCL_DEBUG above, for CCL_LOG_LEVEL.
+        env_vars = _get_ray_init_env_vars({"CCL_LOG_LEVEL": "debug"})
+        assert env_vars["CCL_LOG_LEVEL"] == "debug"
 
     def test_tokenizers_parallelism_user_false(self):
         env_vars = _get_ray_init_env_vars({"TOKENIZERS_PARALLELISM": "false"})
