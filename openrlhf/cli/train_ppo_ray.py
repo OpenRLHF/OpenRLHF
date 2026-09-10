@@ -427,6 +427,16 @@ if __name__ == "__main__":
             "In GRPO, k3 is utilized as the loss function, while k2, when used as the loss, is nearly equivalent to k1."
         ),
     )
+    parser.add_argument(
+        "--algo.kl.unbiased_gradient",
+        action="store_true",
+        default=False,
+        help=(
+            "When using KL as a loss, keep the chosen estimator's value but backprop the true reverse-KL "
+            "gradient with an importance-sampling correction (w = pi_theta / pi_theta_old) for the off-policy "
+            "inner loop. With this on, k1/k2/k3 share the same unbiased gradient. Default off = legacy behavior."
+        ),
+    )
     parser.add_argument("--actor.aux_loss_coef", type=float, default=0, help="MoE balancing loss")
     parser.add_argument(
         "--actor.entropy_coef",
@@ -681,7 +691,9 @@ if __name__ == "__main__":
         )
 
     if args.algo.kl.use_loss:
-        if args.algo.kl.estimator not in ["k2", "k3"]:
+        # With unbiased_gradient the estimator choice no longer affects the gradient (only the
+        # logged value / variance), so the k2/k3 recommendation does not apply.
+        if not args.algo.kl.unbiased_gradient and args.algo.kl.estimator not in ["k2", "k3"]:
             print(f"Recommend setting {args.algo.kl.estimator} to 'k2' or 'k3' when using KL as a loss")
     else:
         if args.algo.kl.estimator not in ["k1"]:
