@@ -1,6 +1,6 @@
 import os
 
-from datasets import interleave_datasets, load_dataset, load_from_disk
+from datasets import Dataset, interleave_datasets, load_dataset, load_from_disk
 
 
 def exist_and_not_none(d, key):
@@ -74,7 +74,7 @@ def blending_datasets(
             strategy.print(f"loaded {dataset} from files")
 
         # Select dataset
-        if dataset_split and dataset_split in data:
+        if dataset_split and not isinstance(data, Dataset) and dataset_split in data:
             data = data[dataset_split]
         data = data.select(range(min(max_count, len(data))))
         data_list.append(data)
