@@ -104,8 +104,6 @@ class RolloutRayActor:
 
             os.environ["RAY_ADDRESS"] = global_worker.gcs_client.address
 
-        os.environ["VLLM_USE_V1"] = "1"
-
     async def init_process_group(
         self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
     ):
