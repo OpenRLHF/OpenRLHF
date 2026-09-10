@@ -328,6 +328,8 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         tasks = []
         for i, rm in enumerate(self.reward_endpoints):
             start_idx = i * batch_size
+            if start_idx >= len(queries_list):
+                break
             end_idx = min((i + 1) * batch_size, len(queries_list))
             payload = {
                 "query": queries_list[start_idx:end_idx],
