@@ -93,7 +93,7 @@ class SamplesGenerator:
         may produce more samples than one training step needs.  Extras are kept
         in ``_sample_buffer`` and served in subsequent calls without hitting vLLM.
         """
-        if getattr(self, "_dataloader_iter", None) is None:
+        if getattr(self, "_dataloader_iter", None) is None and not getattr(self, "_sample_buffer", None):
             self._dataloader_iter = iter(self.prompts_dataloader)
             self._sample_buffer: List[Experience] = []
 
