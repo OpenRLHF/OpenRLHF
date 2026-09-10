@@ -497,6 +497,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 # --rollout.n_samples_per_prompt 4                            # 每个提示多个样本
 # --rollout.vllm_generate_batch_size 2048                     # 生成阶段过采样（> rollout_batch_size）；需要配合 --train.async_enable
 # --algo.advantage.is_correction_enable                         # vLLM 重要性采样修正，用于 off-policy rollout
+# --vllm.rollout_backend tokenspeed                              # 使用 TokenSpeed rollout 后端
 # --algo.advantage.is_correction_type tis                       # 修正类型：tis（token clamp）| icepop（token 过滤）| seq-mask-tis（序列级几何平均）
 # --algo.advantage.is_correction_threshold 0.5 5.0               # IS 截断区间：[low, high]
 # --ckpt.best_metric_key eval_default_pass1                # 按评估指标保存最佳检查点（留空自动探测首个 pass1，'none' 禁用）
