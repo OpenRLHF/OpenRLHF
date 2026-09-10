@@ -362,6 +362,10 @@ class BasePPOTrainer(ABC):
             client_states["best_eval_metric_key"] = metric_key
             client_states["best_eval_metric_value"] = current_value
             client_states["checkpoint_metric_key"] = metric_key
+            sample_buffer_state = client_states.pop("sample_buffer_state", None)
+            if sample_buffer_state:
+                sample_buffer_ref, size = sample_buffer_state
+                client_states["sample_buffer"] = ray.get(sample_buffer_ref)[-size:]
 
             tag = f"best_global_step{global_step}"
             refs = self.actor_model_group.async_run_method(
@@ -432,7 +436,9 @@ class BasePPOTrainer(ABC):
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]
-            logger.info(f"checkpoint_states: {checkpoint_states}")
+            checkpoint_log = dict(checkpoint_states)
+            checkpoint_log["sample_buffer"] = len(checkpoint_log.get("sample_buffer", []))
+            logger.info(f"checkpoint_states: {checkpoint_log}")
             return checkpoint_states
         return {
             "episode": 0,
