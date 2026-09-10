@@ -201,7 +201,7 @@ class PolicyLoss(nn.Module):
                 # ICEPOP: token-level filtering (set coefficients outside the interval to 0)
                 vllm_is = torch.exp(rollout_log_ratio).detach()
                 mask = (vllm_is >= low_threshold) & (vllm_is <= high_threshold)
-                vllm_is = vllm_is * mask
+                vllm_is = torch.where(mask, vllm_is, 0.0)
                 loss = vllm_is * loss
             elif self.vllm_is_correction_type == "seq-mask-tis":
                 # seq-mask-tis: use sequence-level geometric mean only for filtering,
