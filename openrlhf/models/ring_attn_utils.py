@@ -1,7 +1,88 @@
 import torch
 import torch.distributed as dist
-from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-from flash_attn.utils.distributed import all_gather
+
+# rearrange lives in einops (an existing OpenRLHF dependency); flash_attn only re-exported it.
+from einops import rearrange
+
+# Prefer the external flash_attn implementations when the package is installed and usable
+# (the established NVIDIA/CUDA path, kept unchanged). Fall back to backend-neutral equivalents
+# ONLY when the top-level flash_attn package is absent - e.g. Intel XPU environments where the
+# flash_attn package is not available. We match exc.name exactly against "flash_attn": a
+# flash_attn that is installed-but-broken raises ModuleNotFoundError for one of its OWN
+# submodules (e.g. "flash_attn_2_cuda" when the compiled extension is missing, or
+# "flash_attn.bert_padding" on a version/layout mismatch), and those must surface as real
+# errors rather than silently activating the fallback.
+try:
+    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input
+    from flash_attn.utils.distributed import all_gather
+except ModuleNotFoundError as exc:
+    if exc.name != "flash_attn":
+        raise
+
+    # transformers ships PyTorch implementations of the padding helpers. They are private
+    # (underscore-prefixed) APIs, so tests/test_ring_attn_utils.py guards their expected
+    # signatures/behavior against transformers upgrades.
+    #
+    # _pad_input / _unpad_input match flash_attn's pad_input / unpad_input contracts and are
+    # aliased directly. _index_first_axis is NOT aliased: transformers' version assumes a
+    # (batch, seqlen, ...) input and flattens the first two dims before indexing, whereas
+    # flash_attn's index_first_axis selects rows along axis 0 and preserves all trailing dims.
+    # OpenRLHF calls index_first_axis on an already-flattened (batch*seqlen, 1) tensor and then
+    # transposes, which needs the trailing dim to survive - so we provide a flash_attn-compatible
+    # wrapper below instead. (Discovered via a real GRPO --packing_samples run, not unit tests.)
+    from transformers.modeling_flash_attention_utils import _pad_input as pad_input
+    from transformers.modeling_flash_attention_utils import _unpad_input as unpad_input
+
+    def index_first_axis(tensor, indices):
+        """Select rows along axis 0 while preserving all trailing dimensions.
+
+        Preserves the contract of flash_attn.bert_padding.index_first_axis:
+        (total, ...) -> (len(indices), ...). Pure torch, no CUDA-specific code; the
+        gather is autograd-aware so gradients flow back to the selected rows.
+        """
+        return torch.index_select(tensor, 0, indices)
+
+    class _AllGatherFunc(torch.autograd.Function):
+        """Autograd-aware all-gather fallback for flash_attn.utils.distributed.all_gather.
+
+        transformers ships no replacement for this one, so it is vendored here. Pure
+        torch.distributed, no CUDA-specific code. Forward all-gathers along dim 0 across ranks;
+        backward reduce-scatters so each rank receives the gradient for its original shard -
+        the same autograd relationship as flash_attn's version.
+        """
+
+        @staticmethod
+        def forward(ctx, input_, process_group):
+            ctx.process_group = process_group
+            if not dist.is_initialized():
+                raise RuntimeError("torch.distributed must be initialized before all_gather")
+            world_size = dist.get_world_size(process_group)
+            input_ = input_.contiguous()
+            output = torch.empty(
+                world_size * input_.shape[0], *input_.shape[1:], dtype=input_.dtype, device=input_.device
+            )
+            dist.all_gather_into_tensor(output, input_, group=process_group)
+            return output
+
+        @staticmethod
+        def backward(ctx, grad_output):
+            world_size = dist.get_world_size(ctx.process_group)
+            if grad_output.shape[0] % world_size != 0:
+                raise RuntimeError(
+                    f"grad_output dim 0 must be divisible by world size {world_size}; got {grad_output.shape[0]}"
+                )
+            grad_output = grad_output.contiguous()
+            grad_input = torch.empty(
+                grad_output.shape[0] // world_size,
+                *grad_output.shape[1:],
+                dtype=grad_output.dtype,
+                device=grad_output.device,
+            )
+            dist.reduce_scatter_tensor(grad_input, grad_output, group=ctx.process_group)
+            return grad_input, None
+
+    all_gather = _AllGatherFunc.apply
+
 
 RING_ATTN_GROUP = None
 
@@ -40,7 +121,7 @@ def reset_ring_attn_position_ids(start, end, packed_seq_lens):
         end: the end position
         packed_seq_lens: the sequence lengths of packed sequences
     """
-    position_ids = torch.zeros((1, end - start), dtype=torch.long, device=torch.cuda.current_device())
+    position_ids = torch.zeros((1, end - start), dtype=torch.long, device=torch.accelerator.current_device_index())
     offset = 0
     for seqlen in packed_seq_lens:
         seq_start = max(offset, start)
