@@ -314,7 +314,7 @@ pip install -e .
 
 **ROCmサポート**：手間のかからないセットアップのためにDockerを推奨します
 ```bash
-docker build -f dockerfile/Dockerfile.AMD -t openrlhf-rocm:validated .
+docker build -f dockerfile/Dockerfile.rocm -t openrlhf-rocm:validated .
 bash ./examples/amd_scripts/docker_run.sh
 ```
 

@@ -320,7 +320,7 @@ pip install -e .
 
 **ROCm Support**: Docker is recommended for a hassle-free setup
 ```bash
-docker build -f dockerfile/Dockerfile.AMD -t openrlhf-rocm:validated .
+docker build -f dockerfile/Dockerfile.rocm -t openrlhf-rocm:validated .
 bash ./examples/amd_scripts/docker_run.sh
 ```
 

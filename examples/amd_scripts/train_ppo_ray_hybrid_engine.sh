@@ -1,9 +1,5 @@
 set -x
 
-export PYTORCH_ALLOC_CONF=expandable_segments:True
-
-export NCCL_IB_DISABLE=1
-export NCCL_P2P_DISABLE=1   # Disabling P2P is to avoid GPU hangs.
 
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref.num_nodes 1 \

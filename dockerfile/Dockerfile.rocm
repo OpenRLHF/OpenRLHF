@@ -102,6 +102,7 @@ RUN set -eux; \
 
 ENV VLLM_USE_MEGA_AOT_ARTIFACT=0
 ENV TOKENIZERS_PARALLELISM=false
+ENV HSA_ENABLE_IPC_MODE_LEGACY=1
 
 ENV VLLM_CACHE_ROOT=/workspace/.cache/vllm
 RUN mkdir -p /workspace/.cache/vllm
