@@ -244,30 +244,49 @@ class RemoteExperienceMaker:
 
         # ── Reward shaping (baseline subtraction) ──
         exp_len = [len(experience.index) for experience in experiences]
-        indices = torch.tensor(list(itertools.chain.from_iterable(experience.index for experience in experiences)))
+        indices = torch.tensor(
+            list(itertools.chain.from_iterable(experience.index for experience in experiences)),
+            device=experiences[0].rewards.device,
+        )
         raw_rewards = torch.cat([experience.rewards for experience in experiences], dim=0)
         rewards = torch.empty_like(raw_rewards)
         rewards[indices] = raw_rewards  # sorted by original prompt order
 
         rewards = rewards.reshape(-1, args.rollout.n_samples_per_prompt)
+        raw_has_actions = torch.cat(
+            [experience.action_mask.any(dim=-1) for experience in experiences],
+            dim=0,
+        ).to(device=raw_rewards.device)
+        has_actions = torch.empty_like(raw_has_actions, dtype=torch.bool)
+        has_actions[indices] = raw_has_actions
+        has_actions = has_actions.reshape(-1, args.rollout.n_samples_per_prompt)
+        valid_reward_mask = has_actions.to(dtype=rewards.dtype)
+        valid_reward_count = valid_reward_mask.sum(-1, keepdim=True)
+        valid_reward_sum = (rewards * valid_reward_mask).sum(-1, keepdim=True)
+        valid_reward_mean = valid_reward_sum / valid_reward_count.clamp(min=1)
+        valid_reward_delta = torch.where(has_actions, rewards - valid_reward_mean, torch.zeros_like(rewards))
+        valid_reward_std = (
+            valid_reward_delta.pow(2).sum(-1, keepdim=True) / (valid_reward_count - 1).clamp(min=1)
+        ).sqrt()
 
         if args.rollout.n_samples_per_prompt > 1:
             group_reward_stds = (
-                rewards.std(-1, keepdim=True)
-                .repeat(1, args.rollout.n_samples_per_prompt)
-                .reshape(-1)[indices]
-                .split(exp_len)
+                valid_reward_std.repeat(1, args.rollout.n_samples_per_prompt).reshape(-1)[indices].split(exp_len)
             )
             for experience, group_reward_std in zip(experiences, group_reward_stds):
                 experience.info["group_reward_std"] = group_reward_std
 
         if args.algo.advantage.estimator == "rloo":
-            baseline = (rewards.sum(-1, keepdim=True) - rewards) / (args.rollout.n_samples_per_prompt - 1)
-            rewards = rewards - baseline
+            baseline = (valid_reward_sum - rewards * valid_reward_mask) / (
+                valid_reward_count - valid_reward_mask
+            ).clamp(min=1)
+            rewards = torch.where(has_actions, rewards - baseline, torch.zeros_like(rewards))
         elif args.algo.advantage.estimator in ["reinforce_baseline", "dr_grpo"]:
-            rewards = rewards - rewards.mean(-1, keepdim=True)
+            rewards = valid_reward_delta
         elif args.algo.advantage.estimator == "group_norm":
-            rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
+            rewards = valid_reward_delta / (valid_reward_std + 1e-9)
+        else:
+            rewards = torch.where(has_actions, rewards, torch.zeros_like(rewards))
 
         rewards = rewards.reshape(-1)[indices].split(exp_len)
 
