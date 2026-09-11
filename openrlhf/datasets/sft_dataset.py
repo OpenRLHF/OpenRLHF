@@ -150,8 +150,13 @@ class SFTDataset(Dataset):
                 add_special_tokens=False,
             )
             prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
-            # filter the sample whose length is greater than max_length (2 for answer length)
-            if not prompt or not response or prompt_ids_len >= self.max_length - 2:
+            # Multi-turn training can use earlier answers even when the final prompt is truncated.
+            has_trainable_response = (
+                any(start_idx < self.max_length - 2 for start_idx, _ in response_ranges)
+                if self.multiturn
+                else prompt_ids_len < self.max_length - 2
+            )
+            if not prompt or not response or not has_trainable_response:
                 prompt = None
         else:
             prompt_ids_len = 0
