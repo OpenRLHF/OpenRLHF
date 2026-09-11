@@ -808,7 +808,7 @@ Your sponsorship can help us maintain and improve OpenRLHF. If you find this pro
 
 ## Starchart
 
-[![Star History Chart](https://api.star-history.com/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.com/#OpenRLHF/OpenRLHF&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.dera.page/#OpenRLHF/OpenRLHF&type=date)
 
 ## Contributors
 

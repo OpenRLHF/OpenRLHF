@@ -789,7 +789,7 @@ python -m openrlhf.cli.lora_combiner \
 
 ## Star 历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.com/#OpenRLHF/OpenRLHF&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=OpenRLHF/OpenRLHF&type=Date)](https://star-history.dera.page/#OpenRLHF/OpenRLHF&type=date)
 
 ## 贡献者
 
