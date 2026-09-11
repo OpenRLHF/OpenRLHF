@@ -117,6 +117,7 @@ def train(args):
             True,
             False,
             eval_dataset.collate_fn,
+            drop_last=False,
             num_workers=args.data.dataloader_num_workers,
         )
 
