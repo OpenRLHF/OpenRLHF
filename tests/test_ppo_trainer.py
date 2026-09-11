@@ -116,3 +116,63 @@ def test_sync_fit_does_not_train_empty_exhausted_result(ppo_module):
     trainer.fit()
 
     assert trainer.samples_generator.calls == 1
+
+
+def _checkpoint_trainer(module):
+    trainer = module.BasePPOTrainer.__new__(module.BasePPOTrainer)
+    trainer.args = SimpleNamespace(logger=SimpleNamespace(logging_steps=1), ckpt=SimpleNamespace(save_steps=1))
+    trainer.actor_model_group = MagicMock()
+    trainer.actor_model_group.async_run_method.return_value = []
+    trainer.critic_model_group = None
+    trainer.wandb_logger = trainer.tensorboard_logger = None
+    trainer.best_eval_metric_key = ""
+    trainer.best_eval_metric_value = float("-inf")
+    trainer._latest_eval_metric_value = None
+    return trainer
+
+
+@pytest.mark.parametrize("best,latest", [(0.8, 0.5), (0.0, -0.2), (-0.2, -0.5)])
+def test_regular_checkpoint_restores_best_and_latest_metrics(ppo_module, tmp_path, best, latest):
+    import torch
+
+    trainer = _checkpoint_trainer(ppo_module)
+    trainer.save_best_checkpoint({"eval_math_pass1": best}, 1)
+    trainer.save_best_checkpoint({"eval_math_pass1": latest}, 2)
+    trainer.save_logs_and_checkpoints(3, client_states={"global_step": 3})
+    saved = trainer.actor_model_group.async_run_method.call_args.kwargs["client_states"]
+    path = tmp_path / "client_state.pt"
+    torch.save(saved, path)
+
+    resumed = _checkpoint_trainer(ppo_module)
+    resumed.restore_best_checkpoint_state(torch.load(path, weights_only=True))
+    assert resumed.best_eval_metric_key == "eval_math_pass1"
+    assert resumed.best_eval_metric_value == best
+    assert resumed._latest_eval_metric_value == latest
+    resumed.save_best_checkpoint({"eval_math_pass1": (best + latest) / 2}, 4)
+    resumed.actor_model_group.async_run_method.assert_not_called()
+    resumed.save_best_checkpoint({"eval_math_pass1": best + 0.1}, 5)
+    assert resumed.actor_model_group.async_run_method.call_args.kwargs["tag"] == "best_global_step5"
+
+
+def test_best_checkpoint_overwrites_previous_latest_metric(ppo_module):
+    trainer = _checkpoint_trainer(ppo_module)
+    trainer.save_best_checkpoint({"eval_math_pass1": 0.8}, 1, {"latest_eval_metric_value": 0.2})
+    saved = trainer.actor_model_group.async_run_method.call_args.kwargs["client_states"]
+    resumed = _checkpoint_trainer(ppo_module)
+    resumed.restore_best_checkpoint_state(saved)
+    assert resumed.best_eval_metric_value == resumed._latest_eval_metric_value == 0.8
+
+
+@pytest.mark.parametrize(
+    "state,best,latest",
+    [
+        ({}, float("-inf"), None),
+        ({"best_eval_metric_key": "eval_math_pass1", "best_eval_metric_value": 0.0}, 0.0, 0.0),
+        ({"best_eval_metric_value": 0.8, "latest_eval_metric_value": None}, 0.8, None),
+    ],
+)
+def test_restore_checkpoint_metric_compatibility(ppo_module, state, best, latest):
+    trainer = _checkpoint_trainer(ppo_module)
+    trainer.restore_best_checkpoint_state(state)
+    assert trainer.best_eval_metric_value == best
+    assert trainer._latest_eval_metric_value == latest
