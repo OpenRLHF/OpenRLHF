@@ -3,6 +3,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 _TEST_PACKAGE = "_openrlhf_kl_test"
@@ -108,3 +109,34 @@ def test_k1_off_gradient_is_broken_baseline():
     log_probs_base = torch.randn(4, 8)
     g = _grad_wrt_log_probs(log_probs, log_probs_base, kl_estimator="k1", unbiased_gradient=False)
     assert torch.allclose(g, torch.ones_like(g))
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("corrected", [False, True])
+def test_k3_extreme_finite_log_probs_match_clipped_reference(dtype, corrected):
+    log_probs = torch.tensor([-100.0, -90.0, -11.0, -10.0, -3.0, -1.0, -0.1, 0.0], dtype=dtype, requires_grad=True)
+    base = torch.zeros_like(log_probs)
+    actual = compute_approx_kl(log_probs, base, kl_estimator="k3", unbiased_gradient=corrected)
+    actual.sum().backward()
+
+    reference_input = log_probs.detach().double().requires_grad_(True)
+    reference = ((-reference_input).exp() - 1 + reference_input).clamp(-10, 10)
+    reference.sum().backward()
+    expected_grad = reference_input.detach() if corrected else reference_input.grad
+    torch.testing.assert_close(actual, reference.float(), atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(log_probs.grad, expected_grad.to(dtype), atol=1e-6, rtol=1e-5)
+
+
+def test_k3_kl_regularization_does_not_corrupt_optimizer_update():
+    logits = torch.nn.Parameter(torch.tensor([[0.0, -100.0], [0.0, -1.0]]))
+    reference_logits = torch.tensor([[0.0, 0.0], [0.0, -0.2]])
+    optimizer = torch.optim.AdamW([logits], lr=1e-3)
+    log_probs = logits.log_softmax(-1)[:, 1]
+    base = reference_logits.log_softmax(-1)[:, 1]
+    loss = compute_approx_kl(log_probs, base, kl_estimator="k3").mean() * 1e-3
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert torch.isfinite(logits.grad).all()
+    assert logits.grad[1].abs().sum() > 0
+    optimizer.step()
+    assert torch.isfinite(logits).all()

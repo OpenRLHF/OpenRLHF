@@ -103,7 +103,10 @@ def compute_approx_kl(
     elif kl_estimator == "k3":
         # Non-negative KL approximation: exp(q - p) - 1 - (q - p)
         # http://joschu.net/blog/kl-approx.html
-        value = (-log_ratio).exp() - 1 + log_ratio
+        # Below -10, k3 already exceeds the final cap. Bound before exp to
+        # avoid an overflowing derivative (0 * inf) after the final clamp.
+        k3_log_ratio = log_ratio.clamp(min=-10)
+        value = (-k3_log_ratio).exp() - 1 + k3_log_ratio
     else:
         raise ValueError(f"Unknown kl_estimator: {kl_estimator}")
 
