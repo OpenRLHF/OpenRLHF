@@ -98,6 +98,24 @@ class RewardDataset(Dataset):
         self.rejects = processed_dataset["reject"]
         self.extras = processed_dataset["extra"]
 
+    def _tokenize(self, text):
+        text = text.rstrip("\n")
+        if not text.endswith(self.tokenizer.eos_token):
+            text += " " + self.tokenizer.eos_token
+        token = self.tokenizer(
+            text,
+            max_length=self.max_length,
+            padding=False,
+            truncation=True,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+
+        # to avoid EOS_token truncation
+        token["input_ids"][0][-1] = self.tokenizer.eos_token_id
+        token["attention_mask"][0][-1] = True
+        return token
+
     def process_data(self, data):
         prompt, chosen, reject, margin = preprocess_data(
             data,
@@ -124,6 +142,14 @@ class RewardDataset(Dataset):
             if prompt_ids_len >= self.max_length - 2:
                 prompt = None
 
+        if prompt is not None:
+            chosen_token = self._tokenize(prompt + chosen)
+            reject_token = self._tokenize(prompt + reject)
+            same_input_ids = chosen_token["input_ids"].equal(reject_token["input_ids"])
+            same_attention_mask = chosen_token["attention_mask"].equal(reject_token["attention_mask"])
+            if same_input_ids and same_attention_mask:
+                prompt = None
+
         return {
             "prompt": prompt,
             "chosen": chosen,
@@ -138,35 +164,8 @@ class RewardDataset(Dataset):
     def __getitem__(self, idx):
         prompt, chosen, reject, extra = self.prompts[idx], self.chosens[idx], self.rejects[idx], self.extras[idx]
 
-        chosen = (prompt + chosen).rstrip("\n")
-        if not chosen.endswith(self.tokenizer.eos_token):
-            chosen += " " + self.tokenizer.eos_token
-        chosen_token = self.tokenizer(
-            chosen,
-            max_length=self.max_length,
-            padding=False,
-            truncation=True,
-            return_tensors="pt",
-            add_special_tokens=False,
-        )
-
-        reject = (prompt + reject).rstrip("\n")
-        if not reject.endswith(self.tokenizer.eos_token):
-            reject += " " + self.tokenizer.eos_token
-        reject_token = self.tokenizer(
-            reject,
-            max_length=self.max_length,
-            padding=False,
-            truncation=True,
-            return_tensors="pt",
-            add_special_tokens=False,
-        )
-
-        # to avoid EOS_token truncation
-        chosen_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
-        reject_token["input_ids"][0][-1] = self.tokenizer.eos_token_id
-        chosen_token["attention_mask"][0][-1] = True
-        reject_token["attention_mask"][0][-1] = True
+        chosen_token = self._tokenize(prompt + chosen)
+        reject_token = self._tokenize(prompt + reject)
 
         return (
             chosen_token["input_ids"],
