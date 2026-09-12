@@ -239,6 +239,10 @@ class RemoteExperienceMaker:
         """Compute shaped rewards, advantages, and returns for a batch of experiences."""
         args = self.strategy.args
 
+        # Use at least FP32 for reward penalties and group statistics.
+        for experience in experiences:
+            experience.rewards = experience.rewards.to(torch.promote_types(experience.rewards.dtype, torch.float32))
+
         # ── Length penalties (DAPO overlong / ProRL stop properly) ──
         apply_length_penalties(experiences, args)
 
