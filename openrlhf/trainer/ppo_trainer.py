@@ -205,7 +205,7 @@ class BasePPOTrainer(ABC):
             self.best_eval_metric_key = checkpoint_metric_key
         if checkpoint_metric_value is not None:
             self.best_eval_metric_value = checkpoint_metric_value
-            self._latest_eval_metric_value = checkpoint_metric_value
+            self._latest_eval_metric_value = checkpoint_states.get("latest_eval_metric_value", checkpoint_metric_value)
 
     def fit(self, global_step: int = 0) -> None:
         raise NotImplementedError("fit method is not implemented")
@@ -361,6 +361,7 @@ class BasePPOTrainer(ABC):
             client_states = client_states or {}
             client_states["best_eval_metric_key"] = metric_key
             client_states["best_eval_metric_value"] = current_value
+            client_states["latest_eval_metric_value"] = current_value
             client_states["checkpoint_metric_key"] = metric_key
 
             tag = f"best_global_step{global_step}"
@@ -391,6 +392,9 @@ class BasePPOTrainer(ABC):
         # save ckpt
         client_states = client_states or {}
         if global_step % self.args.ckpt.save_steps == 0:
+            client_states["best_eval_metric_key"] = self.best_eval_metric_key
+            client_states["best_eval_metric_value"] = self.best_eval_metric_value
+            client_states["latest_eval_metric_value"] = self._latest_eval_metric_value
             tag = f"global_step{global_step}"
             metric_value = self._latest_eval_metric_value
             metric_key = client_states.get("checkpoint_metric_key") or self.best_eval_metric_key or None
