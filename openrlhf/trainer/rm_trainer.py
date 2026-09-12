@@ -255,6 +255,7 @@ class RewardModelTrainer(ABC):
             acc = 0
             rewards = []
             loss_sum = 0
+            num_samples = 0
             device = next(self.model.parameters()).device
             for data in eval_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, margin = data
@@ -275,12 +276,14 @@ class RewardModelTrainer(ABC):
                 loss = self.loss_fn(chosen_reward, reject_reward, margin)
 
                 rewards += [chosen_reward.flatten(), reject_reward.flatten()]
-                acc += (chosen_reward > reject_reward).float().mean().item()
-                loss_sum += loss.item()
+                batch_size = chosen_reward.numel()
+                acc += (chosen_reward > reject_reward).sum().item()
+                loss_sum += loss.item() * batch_size
+                num_samples += batch_size
                 step_bar.update()
 
-            acc_mean = acc / eval_dataloader.__len__()
-            loss_mean = loss_sum / eval_dataloader.__len__()
+            acc_mean = acc / num_samples
+            loss_mean = loss_sum / num_samples
 
             rewards = torch.cat(rewards).float()
             rewards = self.strategy.all_gather(rewards)
