@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -15,7 +16,10 @@ from tests.test_experience import Experience
 
 
 @pytest.mark.parametrize("query_count", [0, 1, 4, 6])
-def test_remote_rewards_skip_empty_shards(monkeypatch, query_count):
+@pytest.mark.parametrize("rounds", [1, 6])
+@pytest.mark.parametrize("concurrent", [False, True])
+@pytest.mark.parametrize("replicas", [1, 3])
+def test_remote_rewards_distribute_nonempty_shards(monkeypatch, query_count, rounds, concurrent, replicas):
     monkeypatch.setitem(sys.modules, "openrlhf.utils.logging_utils", SimpleNamespace(init_logger=logging.getLogger))
     spec = importlib.util.spec_from_file_location(
         "_openrlhf_agent_test", Path(__file__).resolve().parents[1] / "openrlhf" / "utils" / "agent.py"
@@ -25,10 +29,12 @@ def test_remote_rewards_skip_empty_shards(monkeypatch, query_count):
 
     async def run():
         received = []
+        requests_per_replica = Counter()
 
         async def get_reward(request):
             payload = await request.json()
             received.append(payload)
+            requests_per_replica[request.match_info["replica"]] += 1
             # The shipped reward server requires a nonempty query batch.
             if not payload["query"]:
                 raise web.HTTPBadRequest(text="empty query batch")
@@ -37,14 +43,26 @@ def test_remote_rewards_skip_empty_shards(monkeypatch, query_count):
         app = web.Application()
         app.router.add_post("/{replica}", get_reward)
         async with TestServer(app) as server:
-            executor = agent.SingleTurnAgentExecutor([str(server.make_url(f"/{i}")) for i in range(3)])
-            queries = [str(i) for i in range(query_count)]
-            prompts = [f"prompt-{i}" for i in range(query_count)]
-            labels = [f"label-{i}" for i in range(query_count)]
-            results = await executor._fetch_rewards_via_http(queries, prompts, labels)
+            executor = agent.SingleTurnAgentExecutor([str(server.make_url(f"/{i}")) for i in range(replicas)])
+            queries = [str(i) for i in range(query_count * rounds)]
+            prompts = [f"prompt-{i}" for i in range(query_count * rounds)]
+            labels = [f"label-{i}" for i in range(query_count * rounds)]
+            calls = [
+                executor._fetch_rewards_via_http(
+                    queries[i * query_count : (i + 1) * query_count],
+                    prompts[i * query_count : (i + 1) * query_count],
+                    labels[i * query_count : (i + 1) * query_count],
+                )
+                for i in range(rounds)
+            ]
+            results = await asyncio.gather(*calls) if concurrent else [await call for call in calls]
 
         assert all(payload["query"] for payload in received)
-        assert [reward for result in results for reward in result["rewards"]] == list(range(query_count))
+        counts = [requests_per_replica[str(i)] for i in range(replicas)]
+        assert max(counts) - min(counts) <= 1
+        assert [reward for batch in results for result in batch for reward in result["rewards"]] == list(
+            range(query_count * rounds)
+        )
         received.sort(key=lambda payload: int(payload["query"][0]))
         for key, expected in (("query", queries), ("prompts", prompts), ("labels", labels)):
             assert [value for payload in received for value in payload[key]] == expected

@@ -1,6 +1,7 @@
 import asyncio
 from abc import ABC, abstractmethod
 from copy import deepcopy
+from itertools import cycle
 
 import aiohttp
 
@@ -190,6 +191,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
     def __init__(self, remote_rm_url=None):
         reward_endpoints = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
         self.reward_endpoints = reward_endpoints or []
+        self._reward_endpoint_cycle = cycle(self.reward_endpoints)
 
         # Optional user-provided reward_func from a Python file.
         self.reward_func = None
@@ -329,10 +331,12 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
         timeout = aiohttp.ClientTimeout(total=180)
 
         tasks = []
-        for i, rm in enumerate(self.reward_endpoints):
+        for i in range(num_servers):
             start_idx = i * batch_size
             if start_idx >= len(queries_list):
                 break
+            # Rollouts usually send one query, so rotate across calls as well as shards.
+            rm = next(self._reward_endpoint_cycle)
             end_idx = min((i + 1) * batch_size, len(queries_list))
             payload = {
                 "query": queries_list[start_idx:end_idx],
