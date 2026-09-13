@@ -261,7 +261,7 @@ class DPOTrainer(ABC):
             )
             acc_sum = 0
             loss_sum = 0
-            times = 0
+            num_samples = 0
             device = next(self.model.parameters()).device
             for data in eval_dataloader:
                 chosen_ids, c_mask, reject_ids, r_mask, prompt_id_lens = data
@@ -281,14 +281,15 @@ class DPOTrainer(ABC):
                 loss, chosen_reward, reject_reward = self.loss_fn(
                     chosen_logps, rejected_logps, reference_chosen_logps, reference_rejected_logps
                 )
-                acc_sum += (chosen_reward > reject_reward).float().mean().item()
-                loss_sum += loss.item()
-                times += 1
+                batch_size = chosen_reward.numel()
+                acc_sum += (chosen_reward > reject_reward).sum().item()
+                loss_sum += loss.item() * batch_size
+                num_samples += batch_size
                 step_bar.update()
 
             logs = {
-                "eval_loss": loss_sum / times,
-                "acc_mean": acc_sum / times,
+                "eval_loss": loss_sum / num_samples,
+                "acc_mean": acc_sum / num_samples,
             }
             logs = self.strategy.all_reduce(logs)
             step_bar.set_postfix(logs)
