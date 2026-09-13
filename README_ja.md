@@ -41,6 +41,7 @@ OpenRLHFは、**Ray + vLLM分散アーキテクチャ**と**統一エージェ�
 - [📋 機能概要](#包括的な機能) - 完全なRLHFパイプライン機能
 - [🎬 クイックスタート](#クイックスタート) - インストールと一般的なワークフロー
 - [🎓 学習ガイド](#教師あり微調整) - SFT、報酬モデル、RL学習
+- [🎓 AMDサポート](#amdサポート) - 学習サポート
 - [🎯 シングルターンエージェント](#シングルターンエージェントカスタム報酬による強化微調整) - カスタム報酬関数
 - [🤖 マルチターンエージェント](#マルチターンエージェント複雑な環境相互作用) - 複雑な環境
 - [🔧 高度なトピック](#高度なトピック) - LoRA、パフォーマンスチューニング
@@ -309,7 +310,21 @@ pip install -e .
 > [!TIP]
 > 最高のパフォーマンスのために**vLLM 0.29.0+**を推奨します。[Dockerfiles](./dockerfile/)と[Nvidia-Dockerインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)を参照してください。
 
+
+
+**ROCmサポート**：手間のかからないセットアップのためにDockerを推奨します
+```bash
+docker build -f dockerfile/Dockerfile.rocm -t openrlhf-rocm:validated .
+bash ./examples/amd_scripts/docker_run.sh
+```
+
 詳細な使用方法、データセット準備、学習例については、英語版READMEの該当セクションを参照してください。
+
+
+<a id="amdサポート"></a>
+### AMDサポート
+OpenRLHFはAMD ROCm GPU（MI300X）上でハイブリッドエンジン学習に対応しています。学習例については[AMD ROCmクイックスタートガイド](./docs/amd_quick_start.md)を参照してください。
+
 
 ---
 

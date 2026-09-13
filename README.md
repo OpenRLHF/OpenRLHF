@@ -43,6 +43,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 - [📋 Features Overview](#comprehensive-features) - Complete RLHF pipeline capabilities
 - [🎬 Quick Start](#quick-start) - Installation and typical workflow
 - [🎓 Training Guide](#supervised-fine-tuning) - SFT, Reward Model, RL Training
+- [🎓 AMD Support](#amd-support) - Training support
 - [🎯 Single-Turn Agent](#single-turn-agent-reinforced-fine-tuning-with-custom-rewards) - Custom reward functions
 - [🤖 Multi-Turn Agent](#multi-turn-agent-complex-environment-interactions) - Complex environments
 - [🔧 Advanced Topics](#advanced-topics) - LoRA, performance tuning
@@ -315,6 +316,14 @@ pip install -e .
 > [!TIP]
 > We recommend **vLLM 0.29.0+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
 
+
+
+**ROCm Support**: Docker is recommended for a hassle-free setup
+```bash
+docker build -f dockerfile/Dockerfile.rocm -t openrlhf-rocm:validated .
+bash ./examples/amd_scripts/docker_run.sh
+```
+
 ### Prepare Datasets
 
 OpenRLHF provides flexible data processing methods:
@@ -516,6 +525,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 > **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter DeepSpeed GPU device setup issues.
 
 📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
+
+
+<a id="amd-support"></a>
+### AMD Support
+OpenRLHF runs on AMD ROCm GPUs (MI300X) with Hybrid Engine training. See the [AMD ROCm Quick Start Guide](./docs/amd_quick_start.md) for training examples.
+
 
 ---
 

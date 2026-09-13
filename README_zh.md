@@ -41,6 +41,7 @@ OpenRLHF 是**首个**结合 **Ray + vLLM 分布式架构**与**统一 Agent 设
 - [📋 特性概览](#全面特性) - 完整的 RLHF 流程能力
 - [🎬 快速开始](#快速开始) - 安装和典型工作流
 - [🎓 训练指南](#监督微调) - SFT、奖励模型、RL 训练
+- [🎓 AMD支持](#amd支持) - 训练支持
 - [🎯 单轮 Agent](#单轮-agent强化微调与自定义奖励) - 自定义奖励函数
 - [🤖 多轮 Agent](#多轮-agent复杂环境交互) - 复杂环境
 - [🔧 高级主题](#高级主题) - LoRA、性能调优
@@ -314,6 +315,14 @@ pip install -e .
 > [!TIP]
 > 我们推荐 **vLLM 0.29.0+** 以获得最佳性能。参见 [Dockerfiles](./dockerfile/) 和 [Nvidia-Docker 安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
+
+
+**ROCM 支持**：推荐使用 Docker 以实现无忧设置
+```bash
+docker build -f dockerfile/Dockerfile.rocm -t openrlhf-rocm:validated .
+bash ./examples/amd_scripts/docker_run.sh
+```
+
 ### 准备数据集
 
 OpenRLHF 提供灵活的数据处理方法：
@@ -513,6 +522,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 > **GPU 索引错误故障排除**：如果遇到 DeepSpeed GPU 设备设置问题，请设置 `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1`。
 
 📚 **更多示例**：参见 [example/scripts](./examples/scripts/) 和[文档](https://openrlhf.readthedocs.io/en/latest/usage.html)
+
+
+<a id="amd支持"></a>
+### AMD支持
+OpenRLHF 可在 AMD ROCm GPU（MI300X）上运行，支持混合引擎训练。有关训练示例，请参阅 [AMD ROCm 快速入门指南](./docs/amd_quick_start.md)。
+
 
 ---
 
