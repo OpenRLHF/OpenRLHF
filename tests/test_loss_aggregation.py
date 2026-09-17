@@ -291,17 +291,23 @@ def test_seq_mean_token_mean_weighs_every_sequence_the_same():
     torch.testing.assert_close(logp.grad, torch.tensor([[-0.5, -0.5], [-0.5, 0.0]]))
 
 
-def _large_log_ratio_batch():
-    """One sequence with a huge log ratio, one ordinary sequence, in the same batch."""
+def _large_log_ratio_batch(advantage_sign=1.0):
+    """One sequence with a huge log ratio, one ordinary sequence, in the same batch.
+
+    ``advantage_sign`` flips the advantage of the overflowing sequence: with a positive
+    advantage the inf lands in surr1, with a negative one it lands in the clipped surr2
+    comparison instead, and both must stay finite.
+    """
     log_probs = torch.tensor([[100.0, 100.0], [-0.2, -0.4]], requires_grad=True)
     old_log_probs = torch.tensor([[0.0, 0.0], [-0.3, -0.1]])
-    advantages = torch.tensor([[1.0, 1.0], [0.5, -0.5]])
+    advantages = torch.tensor([[advantage_sign, advantage_sign], [0.5, -0.5]])
     mask = torch.ones(2, 2)
     return log_probs, old_log_probs, advantages, mask
 
 
+@pytest.mark.parametrize("advantage_sign", [1.0, -1.0])
 @pytest.mark.parametrize("policy_loss_type", ["ppo", "gspo"])
-def test_large_log_ratio_keeps_the_gradient_finite(policy_loss_type):
+def test_large_log_ratio_keeps_the_gradient_finite(policy_loss_type, advantage_sign):
     """exp() of the importance ratio must be bounded for every policy loss type.
 
     gspo used to clamp a variable it then ignored and exponentiate the unclamped
@@ -309,7 +315,7 @@ def test_large_log_ratio_keeps_the_gradient_finite(policy_loss_type):
     torch.min in the clipped objective then turned that into 0 * inf = nan in the
     backward pass.
     """
-    log_probs, old_log_probs, advantages, mask = _large_log_ratio_batch()
+    log_probs, old_log_probs, advantages, mask = _large_log_ratio_batch(advantage_sign)
 
     loss, *_ = PolicyLoss(policy_loss_type=policy_loss_type)(log_probs, old_log_probs, advantages, action_mask=mask)
     loss.backward()
@@ -318,8 +324,9 @@ def test_large_log_ratio_keeps_the_gradient_finite(policy_loss_type):
     assert torch.isfinite(log_probs.grad).all(), f"{policy_loss_type} gradient is not finite: {log_probs.grad}"
 
 
+@pytest.mark.parametrize("advantage_sign", [1.0, -1.0])
 @pytest.mark.parametrize("policy_loss_type", ["ppo", "gspo"])
-def test_large_log_ratio_does_not_poison_shared_parameters(policy_loss_type):
+def test_large_log_ratio_does_not_poison_shared_parameters(policy_loss_type, advantage_sign):
     """One bad sequence must not nan the update for the whole batch.
 
     Every sequence is produced by the same actor weights, so a nan confined to one
@@ -327,7 +334,7 @@ def test_large_log_ratio_does_not_poison_shared_parameters(policy_loss_type):
     that with a single shared scalar.
     """
     weight = torch.ones(1, requires_grad=True)
-    base_log_probs, old_log_probs, advantages, mask = _large_log_ratio_batch()
+    base_log_probs, old_log_probs, advantages, mask = _large_log_ratio_batch(advantage_sign)
     log_probs = base_log_probs.detach() * weight
 
     loss, *_ = PolicyLoss(policy_loss_type=policy_loss_type)(log_probs, old_log_probs, advantages, action_mask=mask)
@@ -357,3 +364,54 @@ def test_gspo_ratio_matches_the_unclamped_sequence_mean_in_normal_range():
     expected = seq_loss.mean()
 
     assert torch.allclose(loss, expected)
+
+
+def test_gspo_rollout_log_probs_branch_keeps_the_gradient_finite():
+    """With IS correction on, gspo exponentiates log_probs - rollout_log_probs instead.
+
+    That is the comparison between two engines' logprobs, which is where large log ratios
+    show up in practice, so the bound has to cover this branch as well. The train and old
+    logprobs agree here; only the rollout logprobs are far off.
+    """
+    log_probs = torch.tensor([[-0.2, -0.4], [-0.7, -0.3]], requires_grad=True)
+    old_log_probs = log_probs.detach().clone()
+    rollout_log_probs = torch.tensor([[-100.0, -100.0], [-0.6, -0.2]])
+    advantages = torch.tensor([[1.0, 1.0], [0.5, -0.5]])
+    mask = torch.ones(2, 2)
+
+    loss, *_ = PolicyLoss(policy_loss_type="gspo", is_correction_level="token")(
+        log_probs, old_log_probs, advantages, action_mask=mask, rollout_log_probs=rollout_log_probs
+    )
+    loss.backward()
+
+    assert torch.isfinite(loss), "gspo rollout-branch loss is not finite"
+    assert torch.isfinite(log_probs.grad).all(), f"gspo rollout-branch gradient is not finite: {log_probs.grad}"
+
+
+def test_gspo_cancelling_token_log_ratios_still_give_ratio_one():
+    """The bound applies to the sequence mean, so tokens that cancel are untouched.
+
+    Token log ratios of +100 and -100 have a sequence mean of 0, so the importance ratio
+    is exactly 1 and the objective is unclipped. Clamping each token first would also give
+    1 here, but a mean of 20 from [100, -60] would not, which the assertion below pins.
+    """
+    log_probs = torch.tensor([[100.0, -100.0]], requires_grad=True)
+    old_log_probs = torch.zeros(1, 2)
+    advantages = torch.ones(1, 2)
+    mask = torch.ones(1, 2)
+
+    loss, clip_ratio, *_ = PolicyLoss(policy_loss_type="gspo")(log_probs, old_log_probs, advantages, action_mask=mask)
+    loss.backward()
+
+    # ratio == 1 with advantage 1 gives a per-sequence loss of exactly -1 and no clipping.
+    assert torch.allclose(loss, torch.tensor(-1.0))
+    assert clip_ratio == 0
+    # d ratio / d log_probs[i] = ratio / T = 1 / 2, and d loss / d ratio = -mean(advantages) = -1.
+    assert torch.allclose(log_probs.grad, torch.full((1, 2), -0.5))
+
+    # The mean is what is bounded: [100, -60] has mean 20, so the ratio is exp(20), not 1.
+    skewed = torch.tensor([[100.0, -60.0]])
+    loss_skewed, *_ = PolicyLoss(policy_loss_type="gspo", clip_eps_low=1e9, clip_eps_high=1e9)(
+        skewed, old_log_probs, advantages, action_mask=mask
+    )
+    assert torch.allclose(loss_skewed, -torch.tensor(20.0).exp())
