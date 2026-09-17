@@ -6,6 +6,7 @@ import torch
 from tqdm import tqdm
 from vllm import SamplingParams
 
+from openrlhf.trainer.ppo_utils.dynamic_filtering import extract_group_scores, should_keep_group
 from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.logging_utils import init_logger
@@ -165,16 +166,22 @@ class SamplesGenerator:
                     self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
                 ]
 
-                # Drop experiences if the average score falls outside the allowed range.
-                if dynamic_filtering and all(e.scores is not None for e in experiences):
-                    scores = [e.scores[0].item() for e in experiences]
-                    avg_reward = sum(scores) / len(scores)
-                    min_r, max_r = self.args.algo.dynamic_filtering_range
-                    if not (min_r < avg_reward < max_r):
-                        logger.info(
-                            f"Filtered out: avg_reward={avg_reward:.2f}, threshold=({min_r:.2f}, {max_r:.2f}), scores={[f'{s:.2f}' for s in scores]}"
-                        )
-                        experiences = []
+                # Drop groups that provide no useful GRPO signal:
+                #   - mean score outside the allowed range (existing DAPO behavior), or
+                #   - (near) constant rewards -> zero advantage, no gradient (wasted compute).
+                if dynamic_filtering:
+                    scores = extract_group_scores(experiences)
+                    if scores is not None:
+                        min_r, max_r = self.args.algo.dynamic_filtering_range
+                        std_threshold = self.args.algo.dynamic_filtering_std_threshold
+                        if not should_keep_group(scores, (min_r, max_r), std_threshold):
+                            avg_reward = sum(scores) / len(scores)
+                            logger.info(
+                                f"Filtered out: avg_reward={avg_reward:.2f}, "
+                                f"threshold=({min_r:.2f}, {max_r:.2f}), std_threshold={std_threshold:g}, "
+                                f"scores={[f'{s:.2f}' for s in scores]}"
+                            )
+                            experiences = []
 
                 if experiences:
                     accepted_experiences.extend(experiences)
