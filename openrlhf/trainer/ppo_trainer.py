@@ -230,8 +230,10 @@ class BasePPOTrainer(ABC):
         if self.args.train.dynamic_batch_enable:
             experiences = balance_experiences(experiences, self.args)
 
-        # Push experiences to actor (and critic) shards before PPO.
-        refs = self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences)
+        # Frozen actor rounds skip fit(), so their replay buffer would not be cleared.
+        refs = []
+        if global_step > self.args.critic.freezing_steps and self.actor_model_group is not None:
+            refs.extend(self.actor_model_group.async_run_method_batch(method_name="append", experience=experiences))
         if self.critic_model_group is not None:
             refs.extend(self.critic_model_group.async_run_method_batch(method_name="append", experience=experiences))
         ray.get(refs)
