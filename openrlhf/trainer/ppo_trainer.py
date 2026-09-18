@@ -104,6 +104,8 @@ def compute_eval_metrics(eval_dataloader, samples_list, n_samples_per_prompt):
         all_truncated.append(s.truncated.item() if s.truncated is not None else None)
 
     rewards = torch.tensor(all_rewards).reshape(-1, n_samples_per_prompt)
+    if not rewards.is_floating_point():
+        rewards = rewards.float()
 
     metrics = {}
     for i in range(len(all_prompts) // n_samples_per_prompt):
