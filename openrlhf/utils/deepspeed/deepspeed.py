@@ -19,6 +19,7 @@ from peft import PeftModel, get_peft_model_state_dict
 from torch import distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
 from torchdata.stateful_dataloader import StatefulDataLoader
+from torchdata.stateful_dataloader.sampler import RandomSampler
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor
@@ -231,6 +232,10 @@ class DeepspeedStrategy(ABC):
                 drop_last=drop_last,
                 consumed_samples=consumed_samples,
             )
+
+        if sampler is None and shuffle:
+            # Keep prompt shuffling independent of the controller and worker RNG states.
+            sampler = RandomSampler(replay_buffer, generator=torch.Generator().manual_seed(self.seed))
 
         return StatefulDataLoader(
             replay_buffer,
