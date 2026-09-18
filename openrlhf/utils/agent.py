@@ -94,6 +94,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             sampling_params.max_tokens = max_length - len(current_obs_tokens)
             # No budget to generate, break
             if sampling_params.max_tokens <= 0:
+                is_truncated = True
                 break
 
             # Generate response asynchronously (input and output are token ids)
