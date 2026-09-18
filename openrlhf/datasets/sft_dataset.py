@@ -85,14 +85,16 @@ class SFTDataset(Dataset):
         self.response_ranges = processed_dataset["response_ranges"] if self.multiturn else None
 
     def process_data(self, data):
-        if self.multiturn and self.output_key:
-            data[self.input_key].append(data[self.output_key])
-            data[self.output_key] = None
+        output_key = self.output_key
+        if self.multiturn and output_key:
+            response = data[output_key]
+            if isinstance(response, dict):
+                response = [response]
+            # Reuse the full-conversation path without mutating the source example.
+            data = {**data, self.input_key: data[self.input_key] + response}
+            output_key = None
 
         if self.multiturn:
-            assert (
-                not self.output_key or not data[self.output_key]
-            ), "You should put the whole trajectory into data[input_key] and do not set output_key"
             input_key = self.input_key
             apply_chat_template = self.apply_chat_template
             response_ranges = []
@@ -136,7 +138,7 @@ class SFTDataset(Dataset):
             data,
             None if self.pretrain_mode else self.input_template,
             self.input_key,
-            self.output_key,
+            output_key,
             apply_chat_template=None if self.pretrain_mode else self.apply_chat_template,
         )
 

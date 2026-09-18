@@ -384,6 +384,10 @@ deepspeed --module openrlhf.cli.train_sft \
 # --actor.pretrain_mode_enable                      # Continued pre-training mode
 ```
 
+For multi-turn SFT, enable `--data.apply_chat_template` and provide a complete message list in
+`--data.input_key`, or a prompt message list there and a response message (or message list) in
+`--data.output_key`. Split messages are combined before computing the multi-turn loss mask.
+
 </details>
 
 
