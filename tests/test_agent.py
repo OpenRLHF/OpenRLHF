@@ -156,3 +156,123 @@ def test_multiturn_truncation_reaches_reward_penalty(agent_modules, finish_reaso
         expected_reward = penalty_coef if penalty_coef < 0 else expected_reward * penalty_coef
     assert count == int(expected_truncated)
     assert experience.rewards.item() == expected_reward
+
+
+@pytest.fixture
+def openai_executor(agent_modules, monkeypatch):
+    monkeypatch.setitem(sys.modules, "openrlhf.utils.agent", agent_modules[0])
+    pytest.importorskip("fastapi")
+    for name in ("uvicorn", "openai"):
+        monkeypatch.setitem(sys.modules, name, MagicMock())
+    path = Path(__file__).resolve().parents[1] / "examples/python/agent_func_openai_server_executor.py"
+    spec = importlib.util.spec_from_file_location("_openai_executor_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.AgentExecutor()
+
+
+@pytest.mark.parametrize("image_kwargs", [{}, {"images": None}, {"images": []}])
+@pytest.mark.parametrize("num_samples", [1, 4])
+def test_openai_executor_text_rollouts(openai_executor, monkeypatch, image_kwargs, num_samples):
+    executor = openai_executor
+    executor.client = object()
+    executor._token_traces = {}
+    executor._session_buffers = {}
+    session_ids = []
+
+    async def run_agent(prompt, label, session_id):
+        session_ids.append(session_id)
+        executor._token_traces[session_id] = [
+            {"prompt_token_ids": [10, 20], "completion_token_ids": [30], "finish_reason": "stop", "logprobs": [-0.5]}
+        ]
+        executor._session_buffers[session_id] = [10, 20, 30]
+        await asyncio.sleep(0)
+        return {"reward": 1.0, "scores": 1.0}
+
+    monkeypatch.setattr(executor, "run_agent", run_agent)
+
+    async def run():
+        return await asyncio.gather(
+            *[
+                executor.execute("prompt", "label", SimpleNamespace(logprobs=1), 64, None, None, **image_kwargs)
+                for _ in range(num_samples)
+            ]
+        )
+
+    results = asyncio.run(run())
+    assert len(set(session_ids)) == num_samples
+    for result in results:
+        assert result["prompt"] == "prompt"
+        assert result["label"] == "label"
+        assert result["observation_tokens"] == [10, 20, 30]
+        assert result["action_ranges"] == [(2, 3)]
+        assert result["rollout_log_probs"] == [0.0, 0.0, -0.5]
+        assert result["reward"] == result["scores"] == 1.0
+        assert result["truncated"] is False
+    assert not executor._token_traces
+    assert not executor._session_buffers
+
+
+@pytest.mark.parametrize("images", ["image.png", ["image.png"]])
+def test_openai_executor_rejects_images_before_starting_server(openai_executor, monkeypatch, images):
+    init_server = MagicMock()
+    monkeypatch.setattr(openai_executor, "_init_server", init_server)
+    with pytest.raises(ValueError, match="only supports text"):
+        asyncio.run(openai_executor.execute("prompt", "label", None, 64, None, None, images=images))
+    init_server.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "request_budget, default_budget, expected",
+    [
+        ({}, None, 6),
+        ({"max_tokens": None}, 8, 6),
+        ({}, 3, 3),
+        ({"max_tokens": 2}, None, 2),
+        ({"max_tokens": 20}, None, 6),
+    ],
+)
+@pytest.mark.parametrize("max_length", [8, 2])
+def test_openai_executor_http_token_budget(
+    openai_executor, monkeypatch, request_budget, default_budget, expected, max_length
+):
+    httpx = pytest.importorskip("httpx")
+    executor = openai_executor
+    globals_dict = executor._start_server.__func__.__globals__
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    monkeypatch.setitem(globals_dict, "FastAPI", lambda: app)
+    monkeypatch.setitem(globals_dict, "SamplingParams", SimpleNamespace)
+    monkeypatch.setitem(globals_dict, "urlopen", MagicMock())
+    monkeypatch.setattr(globals_dict["threading"], "Thread", MagicMock())
+    executor.model_name = "test-model"
+    executor.host, executor.port = "127.0.0.1", 0
+    executor.max_length = max_length
+    executor.sampling_params = SimpleNamespace(max_tokens=default_budget, temperature=1.0, top_p=1.0)
+    executor.hf_tokenizer = SimpleNamespace(encode=lambda *args, **kwargs: [10, 20])
+    executor._session_buffers = {}
+    executor._token_traces = {}
+    budgets = []
+
+    async def generate(token_ids, params):
+        budgets.append(params.max_tokens)
+        return SimpleNamespace(outputs=[SimpleNamespace(text="OK", token_ids=[30], finish_reason="stop")])
+
+    executor.llm_engine = SimpleNamespace(generate=generate)
+    executor._start_server()
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            return await client.post(
+                "/v1/chat/completions", json={"messages": [{"role": "user", "content": "Hello"}], **request_budget}
+            )
+
+    response = asyncio.run(run())
+    if max_length == 2:
+        assert response.status_code == 400
+        assert not budgets
+    else:
+        assert response.status_code == 200
+        assert budgets == [expected]
+        assert response.json()["token_ids"] == {"prompt_token_ids": [10, 20], "completion_token_ids": [30]}

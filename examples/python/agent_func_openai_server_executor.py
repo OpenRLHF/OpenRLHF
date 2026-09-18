@@ -9,7 +9,7 @@ Delta-tokenization preserves prefix tokens across multi-turn calls within
 a session. Prefix stability is assumed (i.e. no BPE boundary merges).
 
 Usage:
-    python -m openrlhf.cli.train_ppo \
+    python -m openrlhf.cli.train_ppo_ray \
         --train.agent_func_path examples/python/agent_func_openai_server_executor.py ...
 """
 
@@ -136,7 +136,7 @@ class AgentExecutor(AgentExecutorBase):
                 )
 
             sp = SamplingParams(
-                max_tokens=min(max_tokens, remaining),
+                max_tokens=remaining if max_tokens is None else min(max_tokens, remaining),
                 temperature=temperature,
                 top_p=top_p,
                 logprobs=top_logprobs if include_logprobs else None,
@@ -282,8 +282,10 @@ class AgentExecutor(AgentExecutorBase):
             "extra_logs": agent_result.get("extra_logs", {}),
         }
 
-    async def execute(self, prompt, label, sampling_params, max_length, hf_tokenizer, llm_engine):
+    async def execute(self, prompt, label, sampling_params, max_length, hf_tokenizer, llm_engine, images=None):
         """Execute an agent episode and return RL training samples."""
+        if images:
+            raise ValueError("This OpenAI-compatible agent executor only supports text inputs.")
         self.sampling_params = sampling_params
         self.max_length = max_length
         if not hasattr(self, "client"):
