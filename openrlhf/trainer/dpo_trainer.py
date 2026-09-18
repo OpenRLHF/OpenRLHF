@@ -119,10 +119,11 @@ class DPOTrainer(ABC):
         if args.ckpt.save_steps == -1:
             args.ckpt.save_steps = float("inf")  # do not save ckpt
 
-        # Restore step and start_epoch
+        # Optimizer updates may span epochs; locate the data using actual loader length.
         step = consumed_samples // args.train.batch_size * self.strategy.accumulated_gradient + 1
-        start_epoch = consumed_samples // args.train.batch_size // num_update_steps_per_epoch
-        consumed_samples = consumed_samples % (num_update_steps_per_epoch * args.train.batch_size)
+        samples_per_micro_batch = args.train.batch_size // self.strategy.accumulated_gradient
+        samples_per_epoch = len(self.train_dataloader) * samples_per_micro_batch
+        start_epoch, consumed_samples = divmod(consumed_samples, samples_per_epoch)
 
         epoch_bar = tqdm(
             range(start_epoch, self.epochs),
