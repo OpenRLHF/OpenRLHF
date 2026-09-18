@@ -289,3 +289,34 @@ def test_seq_mean_token_mean_weighs_every_sequence_the_same():
     torch.testing.assert_close(loss, torch.tensor(-1.5))
     loss.backward()
     torch.testing.assert_close(logp.grad, torch.tensor([[-0.5, -0.5], [-0.5, 0.0]]))
+
+
+@pytest.mark.parametrize("level", ["token", "seq"])
+@pytest.mark.parametrize("logprob,delta", [(-1.0, 1e-5), (-2.0, 1e-4), (-10.0, 1e-3)])
+@pytest.mark.parametrize("advantage", [-1.0, 1.0])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_binary_kl_roundoff_preserves_in_threshold_gradients(level, logprob, delta, advantage, dtype):
+    # Near-identical probabilities can produce negative KL in FP32. The second
+    # sequence is outside the trust region; padding must not affect either gate.
+    rollout = torch.tensor([[logprob, logprob, -0.1], [-1.0, -1.0, -1.0]], dtype=dtype)
+    old = torch.tensor([[logprob + delta, logprob + delta, -10.0], [-5.0, -5.0, -5.0]], dtype=dtype)
+    mask = torch.tensor([[1, 1, 0], [1, 1, 1]], dtype=dtype)
+    p = rollout.exp().clamp(1e-6, 1 - 1e-6).double()
+    q = old.exp().clamp(1e-6, 1 - 1e-6).double()
+    reference = p * (p / q).log() + (1 - p) * ((1 - p) / (1 - q)).log()
+    assert (reference[0, :2] >= 0).all() and (reference[0, :2] < 5e-3).all()
+    assert (reference[1] > 5e-3).all()
+
+    policy = old.clone().requires_grad_()
+    loss_fn = PolicyLoss(
+        is_correction_level=level, is_correction_gating="binary_kl", is_correction_threshold=[0, 5e-3]
+    )
+    loss, _, _, _, filtered = loss_fn(
+        policy, old, torch.full_like(old, advantage), action_mask=mask, rollout_log_probs=rollout
+    )
+    expected_coef = torch.zeros_like(old)
+    expected_coef[0, :2] = (old - rollout)[0, :2].exp()
+    torch.testing.assert_close(filtered, torch.tensor(0.5 if level == "seq" else 0.6, dtype=filtered.dtype))
+    torch.testing.assert_close(loss, -advantage * expected_coef.sum() / mask.sum())
+    loss.backward()
+    torch.testing.assert_close(policy.grad, -advantage * expected_coef / mask.sum())
