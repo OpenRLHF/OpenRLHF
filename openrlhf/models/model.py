@@ -1,16 +1,13 @@
 from typing import Optional
 
-import deepspeed
 import torch
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
-from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
 
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import set_z3_leaf_modules
 
 logger = init_logger(__name__)
@@ -66,12 +63,15 @@ def get_llm_for_sequence_regression(
         model_type == "critic" or model_type == "reward"
     ), f"invalid model_type: {model_type}, should be critic or reward."
 
-    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    config = kwargs.pop("config", None)
+    if config is None:
+        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
     config.normalize_reward = normalize_reward
     config._attn_implementation = attn_implementation
 
     # Prioritize using the value_head_prefix in the model configuration.
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
+    config.value_head_prefix = value_head_prefix
     logger.info(f"set value_head_prefix to `{value_head_prefix}`")
 
     base_class = AutoModel._model_mapping[type(config)]
@@ -84,6 +84,8 @@ def get_llm_for_sequence_regression(
     # Note: dschf is defined in function scope to avoid global effects
     # https://huggingface.co/docs/transformers/main_classes/deepspeed#nontrainer-deepspeed-integration
     if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+        from transformers.integrations.deepspeed import HfDeepSpeedConfig
+
         dschf = HfDeepSpeedConfig(ds_config)
     else:
         dschf = None
@@ -134,6 +136,8 @@ def get_llm_for_sequence_regression(
             target_modules=target_modules,
             lora_dropout=lora_dropout,
             bias="none",
+            # A newly initialized reward head cannot be recovered from the base LM.
+            modules_to_save=[value_head_prefix] if model_type == "reward" else None,
         )
         model = get_peft_model(model, lora_config)
 
@@ -153,7 +157,8 @@ def get_llm_for_sequence_regression(
         print("[MoE] set output_router_logits as True")
         model.config.output_router_logits = True
 
-    set_z3_leaf_modules(model, detect_hybrid=False)
+    if ds_config is not None:
+        set_z3_leaf_modules(model, detect_hybrid=False)
 
     # https://github.com/huggingface/transformers/issues/26877
     model.config.use_cache = False
@@ -164,6 +169,8 @@ def get_llm_for_sequence_regression(
     if init_value_head:
         value_head = getattr(model, value_head_prefix)
         if dschf is not None:
+            import deepspeed
+
             logger.info("initialize value_head for ZeRO-3 reward model training.")
             with deepspeed.zero.GatheredParameters([value_head.weight], modifier_rank=0):
                 if torch.distributed.get_rank() == 0:
@@ -214,6 +221,8 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             eos_indices = attention_mask.size(1) - 1 - attention_mask.long().fliplr().argmax(dim=1, keepdim=True)
             forward_attention_mask = attention_mask
             if self.packing_samples:
+                from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+
                 input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
                     input_ids, attention_mask, ring_attn_group
                 )
@@ -281,6 +290,8 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             batch, seqlen = input_ids.size()
             forward_attention_mask = attention_mask
             if self.packing_samples:
+                from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+
                 input_ids, position_ids, _, ring_attn_pad_len, indices = unpad_and_slice_tensor(
                     input_ids, attention_mask, ring_attn_group
                 )
