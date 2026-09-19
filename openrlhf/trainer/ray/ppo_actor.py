@@ -2,6 +2,7 @@ import os
 import socket
 from abc import ABC
 from dataclasses import fields
+from itertools import islice
 from typing import Dict, List, Optional, Union
 
 import deepspeed
@@ -159,6 +160,7 @@ class ActorPPOTrainer(ABC):
             self.strategy.ring_attn_group is None
             and self.args.ds.tensor_parallel_size <= 1
             and not self.args.train.dynamic_batch_enable
+            and len(self.replay_buffer) > 0
         )
         dataloader = DataLoader(
             self.replay_buffer,
@@ -170,11 +172,25 @@ class ActorPPOTrainer(ABC):
         )
         device = torch.cuda.current_device()
 
+        num_micro_batches = len(dataloader)
+        if not self.args.train.dynamic_batch_enable:
+            # All ranks must finish at an optimizer boundary; DeepSpeed carries partial
+            # gradients across PPO epochs/rollouts, whose loss normalizers are independent.
+            gas = self.strategy.accumulated_gradient
+            num_micro_batches = int(self.strategy.all_gather(num_micro_batches // gas).min().item()) * gas
+            skipped_samples = len(self.replay_buffer) - num_micro_batches * self.replay_buffer.sample_batch_size
+            if skipped_samples:
+                logger.warning(
+                    "Skipping %d actor samples per epoch on this rank to keep complete optimizer batches.",
+                    skipped_samples,
+                )
+
         status_list = []
         status_mean = {}
         for epoch in range(self.max_epochs):
             pbar = tqdm(
-                dataloader,
+                islice(dataloader, num_micro_batches),
+                total=num_micro_batches,
                 desc=f"Train epoch [{epoch + 1}/{self.max_epochs}]",
                 disable=not self.strategy.is_rank_0(),
             )
