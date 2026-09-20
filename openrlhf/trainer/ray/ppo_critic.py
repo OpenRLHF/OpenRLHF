@@ -123,6 +123,10 @@ class CriticPPOTrainer(ABC):
     ) -> Dict[str, float]:
         self.critic.train()
 
+        if self.args.train.dynamic_batch_enable:
+            # Dynamic batches own the update boundary; GAS=1 would finalize every backward.
+            self.critic.set_gradient_accumulation_boundary(bool(self.replay_buffer.dynamic_optimizer_step[step]))
+
         sequences = experience.sequences
         old_values = experience.values
         returns = experience.returns

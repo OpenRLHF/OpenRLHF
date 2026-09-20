@@ -261,6 +261,10 @@ class ActorPPOTrainer(ABC):
     ) -> Dict[str, float]:
         self.actor.train()
 
+        if self.args.train.dynamic_batch_enable:
+            # Dynamic batches own the update boundary; GAS=1 would finalize every backward.
+            self.actor.model.set_gradient_accumulation_boundary(bool(self.replay_buffer.dynamic_optimizer_step[step]))
+
         sequences = experience.sequences
         action_mask = experience.action_mask
         attention_mask = experience.attention_mask
