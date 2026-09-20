@@ -1,10 +1,12 @@
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 
 
 class _Pbar:
@@ -176,3 +178,147 @@ def test_restore_checkpoint_metric_compatibility(ppo_module, state, best, latest
     trainer.restore_best_checkpoint_state(state)
     assert trainer.best_eval_metric_value == best
     assert trainer._latest_eval_metric_value == latest
+
+
+@pytest.fixture(params=["actor", "critic"])
+def dynamic_ppo_worker(request, monkeypatch):
+    from tests.test_experience import _experience_module
+    from tests.test_loss_aggregation import _loss_module, _loss_utils_module
+    from tests.test_sft_trainer import _Actor, _Engine, _load_module
+
+    root = Path(__file__).resolve().parents[1]
+    fake_ray = MagicMock()
+    fake_ray.remote.side_effect = lambda obj=None, **_: (lambda cls: cls) if obj is None else obj
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    # Stub distributed model loading; run native PPO training steps and losses on CPU.
+    for name in (
+        "openrlhf.trainer.ray.launcher",
+        "openrlhf.trainer.ray.utils",
+        "openrlhf.utils",
+        "openrlhf.utils.deepspeed",
+        "openrlhf.utils.deepspeed.deepspeed_utils",
+        "openrlhf.utils.distributed_util",
+        "openrlhf.utils.vlm_utils",
+    ):
+        monkeypatch.setitem(sys.modules, name, MagicMock())
+    monkeypatch.setitem(sys.modules, "openrlhf.utils.logging_utils", SimpleNamespace(init_logger=logging.getLogger))
+    monkeypatch.setitem(sys.modules, "openrlhf.utils.loss_utils", _loss_utils_module)
+    monkeypatch.setitem(sys.modules, "openrlhf.trainer.ppo_utils.experience", _experience_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "openrlhf.models",
+        SimpleNamespace(
+            Actor=None,
+            PolicyLoss=_loss_module.PolicyLoss,
+            ValueLoss=_loss_module.ValueLoss,
+            aggregate_loss=_loss_module.aggregate_loss,
+            get_llm_for_sequence_regression=None,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "openrlhf.models.utils", sys.modules[_loss_module.__package__ + ".utils"])
+    _load_module(monkeypatch, "openrlhf.utils.seqlen_balancing", root / "openrlhf/utils/seqlen_balancing.py")
+    buffer_module = _load_module(
+        monkeypatch, "_dynamic_ppo_buffer_test", root / "openrlhf/trainer/ppo_utils/replay_buffer.py"
+    )
+    monkeypatch.setitem(sys.modules, "openrlhf.trainer.ppo_utils", buffer_module)
+    kind = request.param
+    module = _load_module(
+        monkeypatch, f"openrlhf.trainer.ray._dynamic_test_{kind}", root / f"openrlhf/trainer/ray/ppo_{kind}.py"
+    )
+    cls = module.ActorPPOTrainer if kind == "actor" else module.CriticPPOTrainer
+    trainer = cls.__new__(cls)
+    trainer.args = SimpleNamespace(
+        train=SimpleNamespace(dynamic_batch_enable=True),
+        ds=SimpleNamespace(tensor_parallel_size=1),
+        actor=SimpleNamespace(entropy_coef=None, aux_loss_coef=0),
+        algo=SimpleNamespace(kl=SimpleNamespace(use_loss=False)),
+    )
+    model = _Actor(1) if kind == "actor" else _Engine(1)
+    engine = model.model if kind == "actor" else model
+    trainer.strategy = SimpleNamespace(
+        ring_attn_group=None,
+        backward=lambda loss, model, optim: engine.backward(loss),
+        optimizer_step=lambda *args, **kwargs: engine.step(),
+        get_grad_norm=lambda _: 0.0,
+    )
+    trainer.aux_loss = False
+    trainer.ema_model = None
+    setattr(trainer, kind, model)
+    setattr(trainer, f"{kind}_optim", engine.optimizer)
+    setattr(trainer, f"{kind}_scheduler", engine.scheduler)
+    setattr(trainer, f"{kind}_loss_fn", _loss_module.PolicyLoss() if kind == "actor" else _loss_module.ValueLoss())
+    return kind, trainer, engine, _experience_module
+
+
+@pytest.mark.parametrize("dynamic", [False, True])
+@pytest.mark.parametrize("token_level", [False, True])
+def test_ppo_sets_dynamic_boundary_before_forward(dynamic_ppo_worker, monkeypatch, dynamic, token_level):
+    kind, trainer, engine, experiences = dynamic_ppo_worker
+    trainer.args.train.dynamic_batch_enable = dynamic
+    engine.gas = 1 if dynamic else 3
+    model = getattr(trainer, kind)
+    loss_fn = getattr(trainer, f"{kind}_loss_fn")
+    loss_fn.token_level_loss = token_level
+    boundaries = []
+
+    def forward(sequences, action_mask=None, **kwargs):
+        boundaries.append(engine.boundary)
+        return engine.weight * sequences[:, 1:].float() / 10 - 2, SimpleNamespace()
+
+    monkeypatch.setattr(model, "forward", forward)
+    # Consecutive updates have different microbatch counts; boundary state must reset.
+    windows = [3, 1, 2] if dynamic else [3, 3]
+    ref_weight = torch.nn.Parameter(torch.tensor(1.0))
+    ref_optimizer = torch.optim.SGD([ref_weight], lr=0.01, momentum=0.9)
+    ref_scheduler = torch.optim.lr_scheduler.StepLR(ref_optimizer, step_size=1, gamma=0.9)
+    for count in windows:
+        features = torch.arange(1, count * 3 + 1).reshape(count, 3)
+        old = features.float() / 10 - 2
+        batch = experiences.Experience(
+            sequences=torch.cat([torch.zeros(count, 1, dtype=torch.long), features], dim=1),
+            attention_mask=torch.ones(count, 4),
+            action_mask=torch.arange(3)[None, :] <= torch.arange(count)[:, None],
+            action_log_probs=old,
+            advantages=-torch.ones(count, 3),
+            values=old,
+            returns=torch.zeros(count, 3),
+        )
+        trainer.replay_buffer = SimpleNamespace(
+            dynamic_optimizer_step=[0] * (count - 1) + [1],
+            dynamic_global_batch_size=[count] * count,
+            dynamic_batch_num_tokens=[batch.action_mask.sum().item()] * count,
+            dynamic_sample_loss_scale=[1 / count] * count,
+        )
+        for step, item in enumerate(experiences.split_experience_batch(batch)):
+            micro = experiences.make_experience_batch([item])
+            norm = (
+                None
+                if dynamic
+                else {
+                    "dp_size": 1,
+                    "global_batch_size": count / engine.gas,
+                    "batch_num_tokens": batch.action_mask.sum() / engine.gas,
+                }
+            )
+            if kind == "actor":
+                trainer.training_step(micro, 0.0, step, norm)
+            else:
+                trainer.training_step(micro, step, norm)
+        values = ref_weight * features.float() / 10 - 2
+        loss = (
+            loss_fn(values, batch.action_log_probs, batch.advantages, batch.action_mask)[0]
+            if kind == "actor"
+            else loss_fn(values, batch.values, batch.returns, batch.action_mask)
+        )
+        loss.backward()
+        ref_optimizer.step()
+        ref_optimizer.zero_grad()
+        ref_scheduler.step()
+        torch.testing.assert_close(engine.weight, ref_weight)
+        torch.testing.assert_close(
+            engine.optimizer.state[engine.weight]["momentum_buffer"],
+            ref_optimizer.state[ref_weight]["momentum_buffer"],
+        )
+    assert boundaries == ([False, False, True, True, False, True] if dynamic else [None] * 6)
+    assert engine.global_steps == len(windows)
+    assert engine.scheduler.state_dict() == ref_scheduler.state_dict()
