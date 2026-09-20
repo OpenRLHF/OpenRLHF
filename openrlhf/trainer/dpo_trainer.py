@@ -321,8 +321,10 @@ class DPOTrainer(ABC):
         )
 
         all_logps_sum, all_logps_mean = self._get_batch_logps(log_probs, att_masks, prompt_id_lens)
-        chosen_logps = all_logps_sum[: chosen_ids.shape[0]]
-        rejected_logps = all_logps_sum[chosen_ids.shape[0] :]
+        # IPO uses response-token means so its target gap does not scale with response length.
+        all_logps = all_logps_mean if self.args.model.ipo_enable else all_logps_sum
+        chosen_logps = all_logps[: chosen_ids.shape[0]]
+        rejected_logps = all_logps[chosen_ids.shape[0] :]
         aux_loss = output.aux_loss if "aux_loss" in output else []
         return chosen_logps, rejected_logps, aux_loss, -all_logps_mean[: chosen_ids.shape[0]].mean()
 
