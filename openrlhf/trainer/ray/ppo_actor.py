@@ -1,6 +1,7 @@
 import os
 import socket
 from abc import ABC
+from contextlib import ExitStack
 from dataclasses import fields
 from typing import Dict, List, Optional, Union
 
@@ -416,15 +417,16 @@ class ActorPPOTrainer(ABC):
 
         torch.cuda.empty_cache()
         model = self.actor.model.module
-        count = 0
+        # TP gather always needs the top-level (possibly PeftModel) module.
+        tp_model = model
 
-        def _broadcast_param(param, count, num_params):
+        def _broadcast_param(name, param, do_empty):
             use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
                 shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
                 refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=do_empty)
                     for engine in self.vllm_engines
                 ]
 
@@ -436,7 +438,7 @@ class ActorPPOTrainer(ABC):
                     self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
-        def _handle_cuda_ipc(param, count, num_params):
+        def _handle_cuda_ipc(name, param, do_empty):
             from torch.multiprocessing.reductions import reduce_tensor
 
             weight = param.data.clone()
@@ -458,36 +460,144 @@ class ActorPPOTrainer(ABC):
                         dtype=param.dtype,
                         shape=shape,
                         ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
+                        empty_cache=do_empty,
                     )
                     for engine in self.vllm_engines
                 ]
                 ray.get(refs)
             torch_dist_barrier_and_cuda_sync()
 
-        def _gather_params_ctx(param):
+        def _param_gather_ctx(param, need_gather):
             """Context manager that gathers sharded/TP-split parameters for weight sync."""
             if self.strategy.args.ds.tensor_parallel_size > 1:
-                return deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True)
-            return deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.ds.zero_stage == 3)
+                return deepspeed.module_inject.layers.GatherReplacedLayerParams([param], tp_model, enabled=True)
+            return deepspeed.zero.GatheredParameters([param], enabled=need_gather)
 
         sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
 
-        # VLM: only sync trainable (language model) params — vision encoder is frozen.
-        params_to_sync = [
-            (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
-        ]
-        num_params = len(params_to_sync)
+        # Tied weights (e.g. Qwen's lm_head.weight IS embed_tokens.weight under
+        # tie_word_embeddings) must be broadcast once, not once per module. The LoRA
+        # path iterates modules individually, so named_parameters()'s built-in
+        # remove_duplicate does not span modules — dedupe by parameter identity here
+        # to match the non-LoRA path's named_parameters(remove_duplicate=True).
+        synced_param_ids = set()
 
-        for name, param in params_to_sync:
-            count += 1  # empty_cache at last param
-            with _gather_params_ctx(param):
-                sync_fn(param, count, num_params)
+        def _broadcast_module(module, prefix, empty_cache_on_last, need_gather, stable_param_ids=None):
+            named = list(module.named_parameters(prefix=prefix))
+            n = len(named)
+            for c, (pname, param) in enumerate(named, start=1):
+                do_empty = empty_cache_on_last and c == n
+                local_name = pname.removeprefix(f"{prefix}.")
+                param_id = stable_param_ids.get(local_name, id(param)) if stable_param_ids else id(param)
+                if param_id in synced_param_ids:
+                    continue  # tied/shared weight already broadcast (e.g. lm_head==embed_tokens)
+                synced_param_ids.add(param_id)
+                with _param_gather_ctx(param, need_gather):
+                    # QLoRA: after merging a LoRA adapter into a 4-bit base layer, the
+                    # weight is a bitsandbytes Params4bit (packed uint8 + quant_state).
+                    # vLLM expects a dense bf16 tensor, so dequantize before sync.
+                    quant_state = getattr(param, "quant_state", None)
+                    if quant_state is not None:
+                        from bitsandbytes.functional import dequantize_4bit
+
+                        dense = dequantize_4bit(param.data, quant_state).to(torch.bfloat16)
+                        sync_fn(pname, torch.nn.Parameter(dense, requires_grad=False), do_empty)
+                    else:
+                        sync_fn(pname, param, do_empty)
+
+        # LoRA: PEFT wraps params as `base_model.model...`, which vLLM cannot map to its
+        # own `model.layers...` names, and the adapter deltas must be folded into the base
+        # weights before sync. So for a PeftModel we merge each LoRA module's adapter into
+        # its base layer, broadcast the merged base weights (correct names + values), then
+        # unmerge. Mirrors OpenRLHF PR #869. Non-LoRA path below is unchanged.
+        from peft.peft_model import PeftModel
+
+        if isinstance(model, PeftModel):
+            lora_model = model.base_model
+            base_model = lora_model.model  # strips the `base_model.` name prefix
+            leaf_modules = self._get_leaf_modules(base_model, use_lora=True)
+            num_modules = len(leaf_modules)
+            zero3 = self.strategy.args.ds.zero_stage == 3
+            for idx, (key, module) in enumerate(leaf_modules, start=1):
+                empty_cache_on_last = idx == num_modules
+                with ExitStack() as stack:
+                    need_gather = zero3
+                    module_name = key.split(".")[-1]
+                    if hasattr(module, "base_layer"):
+                        # LoRA module: gather (if ZeRO-3), merge adapter into base layer,
+                        # broadcast the merged base layer, then unmerge on exit.
+                        base_layer = module.get_base_layer()
+                        stable_param_ids = {name: id(param) for name, param in base_layer.named_parameters()}
+                        stack.enter_context(
+                            deepspeed.zero.GatheredParameters(list(module.parameters()), enabled=need_gather)
+                        )
+                        module.merge(safe_merge=True)
+                        fake_parent = type("FakeParent", (), {})()
+                        lora_model._replace_module(fake_parent, module_name, base_layer, module)
+                        merged = getattr(fake_parent, module_name)
+                        stack.callback(module.unmerge)
+                        # Params already gathered/merged in full -> no further gather.
+                        _broadcast_module(
+                            merged,
+                            prefix=key,
+                            empty_cache_on_last=empty_cache_on_last,
+                            need_gather=False,
+                            stable_param_ids=stable_param_ids,
+                        )
+                    else:
+                        _broadcast_module(
+                            module, prefix=key, empty_cache_on_last=empty_cache_on_last, need_gather=need_gather
+                        )
+        else:
+            # VLM: only sync trainable (language model) params — vision encoder is frozen.
+            params_to_sync = [
+                (n, p)
+                for n, p in model.named_parameters()
+                if p.requires_grad or not getattr(self.actor, "is_vlm", False)
+            ]
+            num_params = len(params_to_sync)
+            zero3 = self.strategy.args.ds.zero_stage == 3
+            for count, (name, param) in enumerate(params_to_sync, start=1):
+                with _param_gather_ctx(param, need_gather=zero3):
+                    sync_fn(name, param, count == num_params)
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
         torch.cuda.empty_cache()
         torch_dist_barrier_and_cuda_sync()
+
+    def _get_leaf_modules(self, root, use_lora):
+        """Return (name, module) leaf modules for weight sync.
+
+        A leaf is a module with no children, or (under LoRA) a module that owns a
+        `base_layer` (i.e. a LoRA-wrapped layer). Parameters attached directly to an
+        intermediate module (not in any submodule) are wrapped so they sync uniformly.
+        LoRA bookkeeping params (lora_A/lora_B/base_layer.*) are skipped — their effect
+        is folded into the base weights via merge(). Mirrors OpenRLHF PR #869.
+        """
+        lora_module_keyword = ["lora_", "base_layer"]
+
+        class IsoParamWrapper:
+            def __init__(self, name, parameter):
+                self.name = name
+                self.parameter = parameter
+
+            def named_parameters(self, prefix=None):
+                # self.name is already the full name; ignore prefix.
+                return [(self.name, self.parameter)]
+
+        leaf_modules = []
+        for name, module in root.named_modules():
+            if len(list(module.children())) == 0 or (use_lora and hasattr(module, "base_layer")):
+                leaf_modules.append((name, module))
+            else:
+                for pname, p in module.named_parameters(recurse=False, prefix=name):
+                    leaf_modules.append((pname, IsoParamWrapper(pname, p)))
+        if use_lora:
+            leaf_modules = [
+                (n, m) for n, m in leaf_modules if not any(keyword in n for keyword in lora_module_keyword)
+            ]
+        return leaf_modules
 
 
 @ray.remote(num_gpus=1)
