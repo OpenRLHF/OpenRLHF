@@ -64,7 +64,11 @@ def _optimizer_step_loss_norm(masks, dp_group, dp_size, gas):
     averaging DeepSpeed/DDP does across DP ranks. (slime applies the same idea via Megatron's
     per-token loss normalizer; DeepSpeed has no equivalent, so we sum the tokens here.)
     """
-    device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
+    # Keep the reduction tensors on the same accelerator as the loss masks (CUDA, XPU,
+    # Ascend NPU, ...). torch.cuda.current_device() returned an *index* that only makes
+    # sense for CUDA and, with the "cpu" fallback, made the all_reduce below run on CPU
+    # tensors against a device collective (NCCL/HCCL) on every non-CUDA backend.
+    device = masks[0].device
     num_tokens = torch.zeros((), dtype=torch.float32, device=device)
     num_samples = torch.zeros((), dtype=torch.float32, device=device)
     for mask in masks:
