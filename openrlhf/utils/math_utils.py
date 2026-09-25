@@ -258,6 +258,25 @@ def _normalize(expr: str | None) -> str | None:
     return expr
 
 
+_UNIT_PATTERN = re.compile(
+    r"\b(cm|centimeters?|meters?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|feet|foot|inches?|yards?|degrees?)\b",
+    re.IGNORECASE,
+)
+_UNIT_NAMES = {
+    "cm": "centimeter",
+    "centimeters": "centimeter",
+    "feet": "foot",
+    "inches": "inch",
+    "degrees": "degree",
+}
+
+
+def _extract_units(answer: str) -> tuple[str, ...]:
+    return tuple(
+        _UNIT_NAMES.get(unit.lower(), unit.lower().removesuffix("s")) for unit in _UNIT_PATTERN.findall(answer)
+    )
+
+
 BAD_SUBSTRINGS = ["^{", "^("]
 BAD_REGEXES = [r"\^[0-9]+\^", r"\^[0-9][0-9]+"]
 TUPLE_CHARS = "()[]"
@@ -422,4 +441,8 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
         return False
     ground_truth = str(ground_truth)
     given_answer = str(given_answer)
+    ground_truth_units = _extract_units(ground_truth)
+    given_answer_units = _extract_units(given_answer)
+    if ground_truth_units and given_answer_units and ground_truth_units != given_answer_units:
+        return False
     return grade_answer_mathd(given_answer, ground_truth) or grade_answer_sympy(given_answer, ground_truth)
