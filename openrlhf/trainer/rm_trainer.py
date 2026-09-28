@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 
 from openrlhf.models import LogExpLoss, PairWiseLoss
+from openrlhf.utils.config import to_dict
 from openrlhf.utils.distributed_sampler import DistributedSampler
 
 
@@ -85,7 +86,7 @@ class RewardModelTrainer(ABC):
                 project=strategy.args.logger.wandb.project,
                 group=strategy.args.logger.wandb.group,
                 name=strategy.args.logger.wandb.run_name,
-                config=strategy.args.__dict__,
+                config=to_dict(strategy.args),
                 reinit=True,
             )
 
