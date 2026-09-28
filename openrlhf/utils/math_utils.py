@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import signal
 import threading
+from itertools import groupby
 
 import sympy
 from pylatexenc import latex2text
@@ -259,7 +260,7 @@ def _normalize(expr: str | None) -> str | None:
 
 
 _UNIT_PATTERN = re.compile(
-    r"\b(cm|centimeters?|meters?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|feet|foot|inches?|yards?|degrees?)\b",
+    r"(?:\b|(?<=\d))(cm|centimeters?|meters?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|feet|foot|inches?|yards?|degrees?)\b",
     re.IGNORECASE,
 )
 _UNIT_NAMES = {
@@ -272,9 +273,9 @@ _UNIT_NAMES = {
 
 
 def _extract_units(answer: str) -> tuple[str, ...]:
-    return tuple(
-        _UNIT_NAMES.get(unit.lower(), unit.lower().removesuffix("s")) for unit in _UNIT_PATTERN.findall(answer)
-    )
+    answer = re.sub(r"\\text\{\s*m\s*\}", " meter ", answer)
+    units = [_UNIT_NAMES.get(unit.lower(), unit.lower().removesuffix("s")) for unit in _UNIT_PATTERN.findall(answer)]
+    return tuple(unit for unit, _ in groupby(units))
 
 
 BAD_SUBSTRINGS = ["^{", "^("]
@@ -393,10 +394,10 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     given_normalized = _normalize(given_answer)
     if ground_truth_normalized is None:
         return False
-    if ground_truth_normalized == given_normalized:
-        return True
     if not given_normalized:
         return False
+    if ground_truth_normalized == given_normalized:
+        return True
     ground_truth_elems = split_tuple(ground_truth_normalized)
     given_elems = split_tuple(given_normalized)
     if len(ground_truth_elems) > 1 and (
