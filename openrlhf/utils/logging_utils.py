@@ -7,6 +7,8 @@ import os
 import sys
 from typing import Any, Dict
 
+from openrlhf.utils.config import to_dict
+
 _FORMAT = "%(levelname)s %(asctime)s %(filename)s:%(lineno)d] %(message)s"
 _DATE_FORMAT = "%m-%d %H:%M:%S"
 
@@ -72,7 +74,7 @@ class WandbLogger:
             project=args.logger.wandb.project,
             group=args.logger.wandb.group,
             name=args.logger.wandb.run_name,
-            config=args.__dict__,
+            config=to_dict(args),
             reinit=True,
         )
 
