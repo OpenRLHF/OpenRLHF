@@ -6,47 +6,74 @@ not the span from first to last 1 (which over-counts in multi-turn agentic
 training because tool-call tokens sit in the gaps between turns).
 """
 
-import torch
+import sys
+import types
 
 
-def _compute_response_length_span(action_mask: torch.Tensor) -> int:
-    """Old (buggy) approach: span from first to last action token."""
-    ones_indices = torch.where(action_mask)[0]
-    return (ones_indices[-1] - ones_indices[0] + 1).item() if len(ones_indices) else 0
+def _load_samples_generator():
+    # samples_generator imports vllm (directly and via vllm_engine); stub those
+    # out when vllm is not installed so the test runs on CPU-only machines.
+    inserted_stubs = []
+    try:
+        import vllm  # noqa: F401
+    except ImportError:
+        vllm_stub = types.ModuleType("vllm")
+        vllm_stub.SamplingParams = object
+        engine_stub = types.ModuleType("openrlhf.trainer.ray.vllm_engine")
+        engine_stub.batch_vllm_engine_call = None
+        for name, stub in (("vllm", vllm_stub), ("openrlhf.trainer.ray.vllm_engine", engine_stub)):
+            if name not in sys.modules:
+                sys.modules[name] = stub
+                inserted_stubs.append(name)
+
+    try:
+        from openrlhf.trainer.ppo_utils import samples_generator
+    finally:
+        # Drop the import-time stubs so later tests see the real (or missing) packages.
+        for name in inserted_stubs:
+            del sys.modules[name]
+
+    return samples_generator
 
 
-def _compute_response_length_sum(action_mask: torch.Tensor) -> int:
-    """New (correct) approach: count of action tokens only."""
-    return action_mask.sum().item()
+def _process(action_ranges, num_tokens, max_len=2048):
+    """Run the production conversion on a synthetic agent response."""
+    response = {
+        "observation_tokens": list(range(num_tokens)),
+        "action_ranges": action_ranges,
+        "rollout_log_probs": None,
+        "prompt": "p",
+        "label": "l",
+    }
+    SamplesGenerator = _load_samples_generator().SamplesGenerator
+    # The method does not touch instance state, so no generator is constructed.
+    return SamplesGenerator._process_response_into_experience(None, response, max_len=max_len)
 
 
-def test_single_turn_approaches_agree():
-    """Single-turn: contiguous span, so both methods return the same value."""
-    # [prompt(3)] [response(5)] [padding(2)]  → action_mask over response only
-    action_mask = torch.tensor([0, 0, 0, 1, 1, 1, 1, 1, 0, 0], dtype=torch.long)
-    assert _compute_response_length_span(action_mask) == _compute_response_length_sum(action_mask) == 5
+def test_single_turn():
+    # [prompt(3)] [response(5)]
+    experience = _process([(3, 8)], num_tokens=8)
+    assert experience.response_length.item() == 5
 
 
-def test_multiturn_sum_excludes_tool_tokens():
-    """Multi-turn agentic: tool tokens sit between turns, span overcounts them."""
+def test_multiturn_excludes_tool_tokens():
     # [prompt(3)] [turn1(4)] [tool(3)] [turn2(5)]
-    action_mask = torch.zeros(15, dtype=torch.long)
-    action_mask[3:7] = 1  # turn 1: 4 tokens
-    action_mask[10:15] = 1  # turn 2: 5 tokens
-
-    assert _compute_response_length_sum(action_mask) == 9  # correct: 4+5
-    assert _compute_response_length_span(action_mask) == 12  # wrong: 14-3+1=12, includes 3 tool tokens
+    experience = _process([(3, 7), (10, 15)], num_tokens=15)
+    assert experience.response_length.item() == 9  # span would give 12
 
 
 def test_multiturn_single_token_turns():
-    """Edge case: each turn is exactly one token."""
-    action_mask = torch.tensor([0, 1, 0, 1, 0], dtype=torch.long)
-    assert _compute_response_length_sum(action_mask) == 2
-    assert _compute_response_length_span(action_mask) == 3  # wrong: 3-1+1=3, includes the gap token
+    experience = _process([(1, 2), (3, 4)], num_tokens=5)
+    assert experience.response_length.item() == 2  # span would give 3
 
 
-def test_empty_action_mask():
-    """No action tokens: both approaches return 0."""
-    action_mask = torch.zeros(8, dtype=torch.long)
-    assert _compute_response_length_sum(action_mask) == 0
-    assert _compute_response_length_span(action_mask) == 0
+def test_truncation_counts_only_kept_action_tokens():
+    # [prompt(3)] [turn1(4)] [tool(3)] [turn2(5)], truncated to 12 tokens:
+    # turn2 keeps tokens 10 and 11 only.
+    experience = _process([(3, 7), (10, 15)], num_tokens=15, max_len=12)
+    assert experience.response_length.item() == 6
+
+
+def test_empty_action_ranges():
+    experience = _process([], num_tokens=8)
+    assert experience.response_length.item() == 0
