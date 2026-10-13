@@ -6,6 +6,7 @@ import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoConfig, AutoModel, BitsAndBytesConfig
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from openrlhf.utils.logging_utils import init_logger
@@ -14,6 +15,24 @@ from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import set_z3_leaf_modules
 
 logger = init_logger(__name__)
+
+
+def _resolve_base_class(config, model_name_or_path: str) -> type:
+    """Look up the model class for ``config``.
+
+    Falls back to the trust-remote-code ``auto_map`` for custom configs
+    (e.g. ``Qwen2RMConfig`` or community reward models such as POLAR-7B)
+    whose type is not part of transformers' ``AutoModel._model_mapping``,
+    mirroring how ``AutoModel.from_pretrained`` resolves such models.
+    """
+    try:
+        return AutoModel._model_mapping[type(config)]
+    except KeyError:
+        auto_map = getattr(config, "auto_map", None) or {}
+        for key in ("AutoModel", "AutoModelForCausalLM"):
+            if key in auto_map:
+                return get_class_from_dynamic_module(auto_map[key], model_name_or_path)
+        raise
 
 
 # Construct transformer with a value head for sequence classification.
@@ -74,7 +93,7 @@ def get_llm_for_sequence_regression(
     value_head_prefix = getattr(config, "value_head_prefix", value_head_prefix)
     logger.info(f"set value_head_prefix to `{value_head_prefix}`")
 
-    base_class = AutoModel._model_mapping[type(config)]
+    base_class = _resolve_base_class(config, model_name_or_path)
     base_pretrained_class = base_class.__base__
     if model_type == "reward":
         cls_class = _get_reward_model(base_pretrained_class, base_class, value_head_prefix, packing_samples)
