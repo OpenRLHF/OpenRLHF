@@ -136,3 +136,116 @@ def test_dynamic_filtering_preserves_terminal_accepted_rollouts(samples_generato
     assert prompts_consumed == 3
     assert exhausted is True
     assert fake_ray.cancelled == []
+
+
+def test_state_dict_roundtrip_preserves_buffer(samples_generator_module):
+    """state_dict + load_state_dict round-trips the oversampling buffer."""
+    module, _ = samples_generator_module
+    args = SimpleNamespace(
+        rollout=SimpleNamespace(batch_size=2, n_samples_per_prompt=1, vllm_generate_batch_size=4),
+        algo=SimpleNamespace(dynamic_filtering_enable=False),
+        vllm=SimpleNamespace(enable_sleep=False),
+    )
+    loader = MagicMock()
+    loader.__iter__.side_effect = lambda: iter([0, 1, 2, 3, 4, 5])
+    generator = module.SamplesGenerator(SimpleNamespace(args=args), loader, None, None, [])
+
+    def fake_generate(dataloader_iter, num_prompts, dynamic_filtering, **kwargs):
+        del dynamic_filtering, kwargs
+        generated = []
+        for _ in range(num_prompts):
+            try:
+                generated.append(next(dataloader_iter))
+            except StopIteration:
+                break
+        return generated, len(generated), len(generated) < num_prompts
+
+    generator._generate_vllm = fake_generate
+
+    # First generation: takes 4 prompts, returns 2 for training, leaves 2 in buffer
+    first, _, _, _ = generator.generate_samples()
+    assert first == [0, 1]
+    assert list(generator._sample_buffer) == [2, 3]
+
+    # Capture checkpoint state
+    ckpt_state = generator.state_dict()
+    assert ckpt_state["sample_buffer"] == [2, 3]
+    assert ckpt_state["dataloader_exhausted"] is False
+
+    # Simulate fresh generator at checkpoint restore: new loader instance,
+    # same cursor position (4 consumed so far).
+    loader2 = MagicMock()
+    loader2.__iter__.side_effect = lambda: iter([4, 5, 6, 7, 8, 9])
+    generator2 = module.SamplesGenerator(SimpleNamespace(args=args), loader2, None, None, [])
+    generator2.load_state_dict(ckpt_state)
+
+    # Next call should yield the buffered experiences first, NOT regenerate from prompt 4.
+    resumed, _, prompts_consumed, exhausted = generator2.generate_samples()
+    assert resumed == [2, 3], f"Expected buffered [2,3], got {resumed}"
+    assert prompts_consumed == 0, f"Should consume 0 new prompts before buffer drain, got {prompts_consumed}"
+    assert exhausted is False
+
+
+def test_state_dict_handles_exhausted_loader(samples_generator_module):
+    """Exhaustion bit prevents regenerating the last batch after resume."""
+    module, _ = samples_generator_module
+    args = SimpleNamespace(
+        rollout=SimpleNamespace(batch_size=2, n_samples_per_prompt=1, vllm_generate_batch_size=4),
+        algo=SimpleNamespace(dynamic_filtering_enable=False),
+        vllm=SimpleNamespace(enable_sleep=False),
+    )
+    loader = MagicMock()
+    loader.__iter__.side_effect = lambda: iter([0, 1])  # Only 2 prompts total
+    generator = module.SamplesGenerator(SimpleNamespace(args=args), loader, None, None, [])
+
+    def fake_generate(dataloader_iter, num_prompts, dynamic_filtering, **kwargs):
+        del dynamic_filtering, kwargs
+        generated = []
+        exhausted_flag = False
+        for _ in range(num_prompts):
+            try:
+                generated.append(next(dataloader_iter))
+            except StopIteration:
+                exhausted_flag = True
+                break
+        return generated, len(generated), exhausted_flag
+
+    generator._generate_vllm = fake_generate
+
+    # Prompt dataloader ends exactly at generation batch boundary.
+    first, _, _, _ = generator.generate_samples()
+    # Generate batch 4 but only 2 prompts exist → returns 2, no buffer leftover
+    assert first == [0, 1]
+    assert generator._sample_buffer == []
+    generator._dataloader_iter = None  # Simulate exhaustion
+
+    ckpt_state = generator.state_dict()
+    assert ckpt_state["sample_buffer"] == []
+    assert ckpt_state["dataloader_exhausted"] is True
+
+    # Restore onto fresh generator
+    loader2 = MagicMock()
+    loader2.__iter__.side_effect = lambda: iter([0, 1])
+    generator2 = module.SamplesGenerator(SimpleNamespace(args=args), loader2, None, None, [])
+    generator2.load_state_dict(ckpt_state)
+
+    # Should report exhausted immediately without regenerating.
+    resumed, _, prompts_consumed, exhausted = generator2.generate_samples()
+    assert resumed == []
+    assert exhausted is True
+
+
+def test_load_state_dict_with_none_is_noop(samples_generator_module):
+    """None state (from old checkpoints) must not crash."""
+    module, _ = samples_generator_module
+    loader = MagicMock()
+    loader.__iter__.side_effect = lambda: iter([0])
+    generator = module.SamplesGenerator(
+        SimpleNamespace(args=SimpleNamespace(rollout=SimpleNamespace(batch_size=2, n_samples_per_prompt=1, vllm_generate_batch_size=2), algo=SimpleNamespace(dynamic_filtering_enable=False), vllm=SimpleNamespace(enable_sleep=False))),
+        loader, None, None, [],
+    )
+    # Before any call → no state at all
+    generator.load_state_dict(None)
+    # Should not crash and should be callable
+    has_iter = getattr(generator, "_dataloader_iter", None) is not None
+    assert has_iter  # iter(self.prompts_dataloader) should have been set
