@@ -698,9 +698,7 @@ if __name__ == "__main__":
 
     if args.ds.packing_samples:
         _attn_impl = args.ds.attn_implementation
-        if args.ds.packing_samples and not (
-            "flash_attention" in _attn_impl or "flash-attn" in _attn_impl
-        ):
+        if args.ds.packing_samples and not ("flash_attention" in _attn_impl or "flash-attn" in _attn_impl):
             print(
                 "[Warning] Please use --attn_implementation with flash_attention "
                 "(or a kernels-community/* flash-attn kernel) to accelerate when "
