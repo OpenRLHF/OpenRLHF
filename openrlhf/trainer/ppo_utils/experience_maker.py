@@ -186,9 +186,7 @@ class RemoteExperienceMaker:
             if need_actor_sync:
                 ray.get(action_log_probs_ref)
                 ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
-            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
-                **vlm_forward_kwargs
-            )
+            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(**vlm_forward_kwargs)
 
         # ── Gather and flatten results ──
 
