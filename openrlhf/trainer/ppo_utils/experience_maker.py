@@ -134,15 +134,23 @@ class RemoteExperienceMaker:
             vlm_forward_kwargs["mm_train_inputs_list"] = [s.mm_train_inputs for s in samples_list]
 
         # ── Dispatch all model forward calls ──
+        # All models are dispatched asynchronously in parallel. Sync + empty_cache
+        # only happens when a subsequent model shares GPU memory with the previous one.
+        # This removes the serialization where actor sync blocked critic/reference dispatch
+        # (see https://github.com/OpenRLHF/OpenRLHF/issues/1358).
 
-        # Reward model
         use_reward_model = samples_list[0].rewards is None
+        colocate_all = args.train.colocate_all
+        colocate_actor_ref = args.train.colocate_actor_ref
+        colocate_critic_reward = args.train.colocate_critic_reward
+
+        # 1. Reward model: sync only under full co-location (same GPU as everything else)
         if use_reward_model:
             if self.reward_model_group is None:
                 raise ValueError("reward_model_group is required when rewards are not precomputed")
             r_refs = self._dispatch_forward(
                 self.reward_model_group,
-                args.train.colocate_all,
+                colocate_all,
                 sequences=sequences_list,
                 attention_mask=attention_mask_list,
                 pad_sequence=[True] * len(samples_list),
@@ -150,36 +158,37 @@ class RemoteExperienceMaker:
         else:
             r_refs = None
 
-        # Actor model (receives mm_train_inputs_list for VLM)
+        # 2. Actor model: sync only under colocate_all (actor shares GPU with critic below).
+        #    With colocate_actor_ref (actor shares GPU only with reference), defer actor sync —
+        #    it happens right before reference dispatch so critic can dispatch in parallel.
         action_log_probs_ref = self._dispatch_forward(
             self.actor_model_group,
-            args.train.colocate_all or args.train.colocate_actor_ref,
+            colocate_all,
             **vlm_forward_kwargs,
         )
 
-        # Critic model
+        # 3. Critic model: async dispatch. If it shares GPU with reward, drain reward first.
+        value_ref = dummy_ref
         if self.critic_model_group is not None:
-            if args.train.colocate_critic_reward and r_refs is not None:
+            if colocate_critic_reward and r_refs is not None:
                 ray.get(r_refs)
                 ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
-
             value_ref = self._dispatch_forward(
                 self.critic_model_group,
-                args.train.colocate_all or args.train.colocate_critic_reward,
+                colocate_all,
                 **forward_kwargs,
             )
-        else:
-            value_ref = dummy_ref
 
-        # Reference model (also receives mm_train_inputs_list for VLM)
+        # 4. Reference model: if it shares GPU with actor, sync + empty_cache actor first
+        base_action_log_probs_ref = dummy_ref
         if self.initial_model_group is not None:
-            base_action_log_probs_ref = self._dispatch_forward(
-                self.initial_model_group,
-                args.train.colocate_all or args.train.colocate_actor_ref,
-                **vlm_forward_kwargs,
+            need_actor_sync = colocate_actor_ref or colocate_all
+            if need_actor_sync:
+                ray.get(action_log_probs_ref)
+                ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
+            base_action_log_probs_ref = self.initial_model_group.async_run_method_batch(
+                **vlm_forward_kwargs
             )
-        else:
-            base_action_log_probs_ref = dummy_ref
 
         # ── Gather and flatten results ──
 
