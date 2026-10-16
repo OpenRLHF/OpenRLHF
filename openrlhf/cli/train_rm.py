@@ -199,7 +199,7 @@ if __name__ == "__main__":
         "--ds.attn_implementation",
         type=str,
         default="flash_attention_2",
-        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/flash-attn2, kernels-community/flash-attn3, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument(
         "--ds.experts_implementation",
@@ -333,9 +333,14 @@ if __name__ == "__main__":
     if args.ds.ring_attn_size > 1:
         assert args.ds.packing_samples, "packing_samples must be enabled when using ring attention"
 
-    if args.ds.packing_samples and "flash_attention" not in args.ds.attn_implementation:
+    _attn_impl = args.ds.attn_implementation
+    if args.ds.packing_samples and not (
+        "flash_attention" in _attn_impl or "flash-attn" in _attn_impl
+    ):
         print(
-            "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
+            "[Warning] Please use --attn_implementation with flash_attention "
+            "(or a kernels-community/* flash-attn kernel) to accelerate when "
+            "--packing_samples is enabled."
         )
         args.ds.attn_implementation = "flash_attention_2"
 
