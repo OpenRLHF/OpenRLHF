@@ -78,6 +78,13 @@ setup(
         "vllm_latest": ["vllm>=0.29.0"],
         "ring": ["ring_flash_attn"],
         "liger": ["liger_kernel"],
+        # Pre-built Hugging Face kernels (flash-attn2, flash-attn3, vllm, …).
+        # transformers>=5.15 picks them up automatically via
+        # attn_implementation="kernels-community/<kernel-name>".
+        "kernels": ["kernels"],
+        # Legacy source-built flash-attn (only needed for ring_attn_utils /
+        # flash_attn.ops.triton.cross_entropy helpers).
+        "flash_attn": ["flash-attn==2.8.3"],
     },
     python_requires=">=3.10",
     classifiers=[
