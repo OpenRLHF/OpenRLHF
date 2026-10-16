@@ -562,9 +562,7 @@ class PPOTrainer(BasePPOTrainer):
                     "total_consumed_prompts": total_consumed_prompts,
                     "data_loader_state_dict": self.prompts_dataloader.state_dict(),
                     "generator_state": (
-                        self.samples_generator.state_dict()
-                        if hasattr(self.samples_generator, "state_dict")
-                        else None
+                        self.samples_generator.state_dict() if hasattr(self.samples_generator, "state_dict") else None
                     ),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
