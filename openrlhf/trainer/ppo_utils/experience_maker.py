@@ -413,6 +413,10 @@ class RemoteExperienceMaker:
         if action_mask is not None:
             rewards = action_mask * rewards
 
+        # Undiscounted returns are suffix sums; avoid a Python iteration per token.
+        if gamma == 1.0:
+            return rewards.flip(-1).cumsum(-1, dtype=returns.dtype).flip(-1)
+
         # Calculate returns by accumulating discounted rewards
         for t in reversed(range(response_length)):
             cumulative_return = rewards[:, t] + gamma * cumulative_return
