@@ -241,8 +241,17 @@ def test_load_state_dict_with_none_is_noop(samples_generator_module):
     loader = MagicMock()
     loader.__iter__.side_effect = lambda: iter([0])
     generator = module.SamplesGenerator(
-        SimpleNamespace(args=SimpleNamespace(rollout=SimpleNamespace(batch_size=2, n_samples_per_prompt=1, vllm_generate_batch_size=2), algo=SimpleNamespace(dynamic_filtering_enable=False), vllm=SimpleNamespace(enable_sleep=False))),
-        loader, None, None, [],
+        SimpleNamespace(
+            args=SimpleNamespace(
+                rollout=SimpleNamespace(batch_size=2, n_samples_per_prompt=1, vllm_generate_batch_size=2),
+                algo=SimpleNamespace(dynamic_filtering_enable=False),
+                vllm=SimpleNamespace(enable_sleep=False),
+            )
+        ),
+        loader,
+        None,
+        None,
+        [],
     )
     # Before any call → no state at all
     generator.load_state_dict(None)

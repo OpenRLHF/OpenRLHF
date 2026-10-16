@@ -10,10 +10,9 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
-
 
 # ── Shared test fixtures ────────────────────────────────────────────────────
 
@@ -408,9 +407,7 @@ def test_async_save_then_load_roundtrip_preserves_generator_state(async_module, 
     gen_actor.eval_dataloader = None
 
     mock_gen = MagicMock()
-    mock_gen.generate_samples.return_value = (
-        ["rollout-A", "rollout-B"], 0.8, 5, True
-    )
+    mock_gen.generate_samples.return_value = (["rollout-A", "rollout-B"], 0.8, 5, True)
     mock_gen.state_dict.return_value = generator_state
     gen_actor.samples_generator = mock_gen
 
