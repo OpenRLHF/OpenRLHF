@@ -134,15 +134,26 @@ class RemoteExperienceMaker:
             vlm_forward_kwargs["mm_train_inputs_list"] = [s.mm_train_inputs for s in samples_list]
 
         # ── Dispatch all model forward calls ──
+        # Each model gets dispatched asynchronously. Sync barriers are applied
+        # explicitly *after* each batch, so models running on separate GPUs can
+        # overlap. ``colocate_all`` still forces in-dispatch sync because all
+        # models share the same GPU pool.
 
-        # Reward model
         use_reward_model = samples_list[0].rewards is None
+        colocate_all = args.train.colocate_all
+        colocate_actor_ref = args.train.colocate_actor_ref
+        colocate_critic_reward = args.train.colocate_critic_reward
+
+        # ── Batch 1: Reward + Actor ──
+        # These always launch in parallel. Only ``colocate_all`` forces sync
+        # inside each dispatch because every model sits on the same GPUs.
+
         if use_reward_model:
             if self.reward_model_group is None:
                 raise ValueError("reward_model_group is required when rewards are not precomputed")
             r_refs = self._dispatch_forward(
                 self.reward_model_group,
-                args.train.colocate_all,
+                colocate_all,
                 sequences=sequences_list,
                 attention_mask=attention_mask_list,
                 pad_sequence=[True] * len(samples_list),
@@ -150,32 +161,41 @@ class RemoteExperienceMaker:
         else:
             r_refs = None
 
-        # Actor model (receives mm_train_inputs_list for VLM)
         action_log_probs_ref = self._dispatch_forward(
             self.actor_model_group,
-            args.train.colocate_all or args.train.colocate_actor_ref,
+            colocate_all,
             **vlm_forward_kwargs,
         )
 
-        # Critic model
-        if self.critic_model_group is not None:
-            if args.train.colocate_critic_reward and r_refs is not None:
-                ray.get(r_refs)
-                ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
+        # ── Barriers ──
+        # When Actor shares GPUs with Reference (but not everything), Actor
+        # memory must be released before Critic/Reference forward can run.
+        if colocate_actor_ref and not colocate_all:
+            ray.get(action_log_probs_ref)
+            ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
 
+        # When Reward shares GPUs with Critic (but not everything), Reward
+        # memory must be released before Critic forward can run.
+        if colocate_critic_reward and not colocate_all and r_refs is not None:
+            ray.get(r_refs)
+            ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
+
+        # ── Batch 2: Critic + Reference ──
+        # These now launch in parallel on their respective GPUs.
+
+        if self.critic_model_group is not None:
             value_ref = self._dispatch_forward(
                 self.critic_model_group,
-                args.train.colocate_all or args.train.colocate_critic_reward,
+                colocate_all,
                 **forward_kwargs,
             )
         else:
             value_ref = dummy_ref
 
-        # Reference model (also receives mm_train_inputs_list for VLM)
         if self.initial_model_group is not None:
             base_action_log_probs_ref = self._dispatch_forward(
                 self.initial_model_group,
-                args.train.colocate_all or args.train.colocate_actor_ref,
+                colocate_all,
                 **vlm_forward_kwargs,
             )
         else:
