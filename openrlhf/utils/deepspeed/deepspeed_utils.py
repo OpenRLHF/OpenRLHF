@@ -218,9 +218,7 @@ def reload_deepspeed_states(model, non_blocking=True):
     from deepspeed.runtime.zero.partition_parameters import PartitionedParamStatus
 
     # Capture whether lp_params was offloaded *before* reload_states removes it from the set
-    lp_params_was_offloaded = OffloadStateTypeEnum.lp_params in getattr(
-        model.optimizer, "offloaded_states", set()
-    )
+    lp_params_was_offloaded = OffloadStateTypeEnum.lp_params in getattr(model.optimizer, "offloaded_states", set())
 
     model.reload_states(non_blocking=non_blocking)
 
