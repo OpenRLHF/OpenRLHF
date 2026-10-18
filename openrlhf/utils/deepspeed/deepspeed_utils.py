@@ -163,6 +163,7 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
 
     # if zero_stage == 3 and not adam_offload:
     from deepspeed.runtime.zero.offload_config import OffloadDeviceEnum, OffloadStateTypeEnum
+    from deepspeed.runtime.zero.partition_parameters import PartitionedParamStatus
 
     offload_state_types = [
         OffloadStateTypeEnum.optim_states,
@@ -174,7 +175,7 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
         # These offload types are fixed in https://github.com/deepspeedai/DeepSpeed/pull/7050
         offload_state_types += [
             OffloadStateTypeEnum.lp_grads,
-            # OffloadStateTypeEnum.lp_params,
+            OffloadStateTypeEnum.lp_params,
         ]
 
     model.optimizer.offload_states(
@@ -183,6 +184,15 @@ def offload_deepspeed_states(model, pin_memory=True, non_blocking=True):
         pin_memory=pin_memory,
         non_blocking=non_blocking,
     )
+
+    # DeepSpeed offload_states(lp_params) moves tensor.data to CPU but does NOT update
+    # PartitionedParamStatus. Mark params as NOT_AVAILABLE so ZeRO-3's forward hook
+    # auto-fetches them back to GPU when experience-making (actor/critic forward) runs.
+    if OffloadStateTypeEnum.lp_params in offload_state_types:
+        for p in model.module.parameters():
+            if hasattr(p, "ds_tensor"):
+                p.ds_tensor.status = PartitionedParamStatus.NOT_AVAILABLE
+
     model.empty_partition_cache()
     torch.cuda.empty_cache()
     torch.distributed.barrier()
@@ -204,8 +214,22 @@ def reload_deepspeed_states(model, non_blocking=True):
 
     # if zero_stage == 3 and not adam_offload:
     import torch
+    from deepspeed.runtime.zero.offload_config import OffloadStateTypeEnum
+    from deepspeed.runtime.zero.partition_parameters import PartitionedParamStatus
+
+    # Capture whether lp_params was offloaded *before* reload_states removes it from the set
+    lp_params_was_offloaded = OffloadStateTypeEnum.lp_params in getattr(model.optimizer, "offloaded_states", set())
 
     model.reload_states(non_blocking=non_blocking)
+
+    # DeepSpeed reload_states(lp_params) restores tensor.data to GPU but does NOT update
+    # PartitionedParamStatus. Restore AVAILABLE so subsequent training/forward paths see
+    # the params as resident (and the ZeRO-3 free-after-use logic works correctly).
+    if lp_params_was_offloaded:
+        for p in model.module.parameters():
+            if hasattr(p, "ds_tensor"):
+                p.ds_tensor.status = PartitionedParamStatus.AVAILABLE
+
     torch.cuda.empty_cache()
     torch.distributed.barrier()
     torch.cuda.synchronize()
