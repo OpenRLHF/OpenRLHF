@@ -61,8 +61,8 @@ class BaseModelActor(BaseDistributedActor):
         raise NotImplementedError()
 
     def empty_cache(self) -> None:
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        torch.accelerator.empty_cache()
+        torch.accelerator.synchronize()
 
     def execute_batch(self, method_name: str, all_data, start_idx, end_idx):
         """Process input data by calling specified function for each item in the lists.
@@ -133,7 +133,7 @@ class ReferenceModelActor(BaseModelActor):
         packed_seq_lens: Optional[list[int]] = None,
         mm_train_inputs_list=None,
     ) -> torch.Tensor:
-        device = torch.cuda.current_device()
+        device = torch.accelerator.current_device_index()
 
         # VLM: merge pre-processed multimodal inputs from all samples in batch
         mm_inputs = {}
@@ -187,7 +187,7 @@ class RewardModelActor(BaseModelActor):
         packed_seq_lens=None,
         pad_sequence=False,
     ) -> torch.Tensor:
-        device = torch.cuda.current_device()
+        device = torch.accelerator.current_device_index()
         with torch.no_grad():
             reward = self.model(
                 sequences.to(device),
