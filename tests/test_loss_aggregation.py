@@ -241,7 +241,9 @@ def test_seq_mask_gates_on_the_per_sequence_geometric_mean_ratio():
         (torch.float64, 700.0, 19.0, -200.0),
     ],
 )
-def test_seq_mask_rejects_overflowing_weighted_loss_with_finite_is(dtype, log_is, policy_shift, old_first):
+def test_seq_mask_rejects_overflowing_weighted_loss_with_finite_is(
+    dtype, log_is, policy_shift, old_first
+):
     old = torch.tensor([[old_first, -log_is], [-1.0, -1.0]], dtype=dtype)
     rollout = torch.tensor([[old_first - log_is, 0.0], [-1.0, -1.0]], dtype=dtype)
     logp = old.clone()
@@ -250,7 +252,7 @@ def test_seq_mask_rejects_overflowing_weighted_loss_with_finite_is(dtype, log_is
     advantages = torch.tensor([[-1.0, 1.0], [1.0, 1.0]], dtype=dtype)
     mask = torch.ones_like(logp)
 
-    # The geometric-mean gate passes, and both operands are finite, but their product overflows.
+    # The sequence gate passes, but finite operands yield an infinite product.
     weights = (old - rollout).exp()
     ratio = (logp - old).clamp(min=-20.0, max=20.0).exp()
     base_loss = -torch.min(ratio * advantages, ratio.clamp(0.8, 1.2) * advantages)
@@ -258,7 +260,9 @@ def test_seq_mask_rejects_overflowing_weighted_loss_with_finite_is(dtype, log_is
     assert not torch.isfinite(weights[0, 0] * base_loss[0, 0])
 
     loss_fn = PolicyLoss(is_correction_level="seq", is_correction_threshold=[0.5, 5.0])
-    loss, _, _, _, filtered = loss_fn(logp, old, advantages, action_mask=mask, rollout_log_probs=rollout)
+    loss, _, _, _, filtered = loss_fn(
+        logp, old, advantages, action_mask=mask, rollout_log_probs=rollout
+    )
     loss.backward()
 
     torch.testing.assert_close(loss, torch.tensor(-0.5, dtype=dtype))
