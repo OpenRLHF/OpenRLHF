@@ -237,6 +237,13 @@ class PolicyLoss(nn.Module):
             else:  # mask: drop out-of-band units, survivors keep their per-token IS weight
                 keep = (stat >= low) & (stat <= high)
                 coef = torch.where(keep, token_is, 0.0)
+                if seq_level:
+                    # The aggregate gate can pass even if weighted PPO contributions overflow.
+                    representable = torch.isfinite(coef * loss.detach())
+                    if action_mask is not None:
+                        representable = representable | ~action_mask.bool()
+                    keep = keep & representable.all(dim=-1, keepdim=True)
+                    coef = torch.where(keep, coef, 0.0)
                 filtered = ~keep
             loss = coef * loss
             # Filter fraction at the unit's own granularity: per token, or per sequence.
