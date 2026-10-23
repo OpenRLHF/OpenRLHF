@@ -232,6 +232,42 @@ def test_seq_mask_gates_on_the_per_sequence_geometric_mean_ratio():
     torch.testing.assert_close(filt, torch.tensor(0.5))
 
 
+@pytest.mark.parametrize(
+    "dtype,log_is,policy_shift,old_first",
+    [
+        (torch.float16, 10.0, 2.0, -5.0),
+        (torch.bfloat16, 80.0, 19.0, -30.0),
+        (torch.float32, 80.0, 19.0, -30.0),
+        (torch.float64, 700.0, 19.0, -200.0),
+    ],
+)
+def test_seq_mask_rejects_overflowing_weighted_loss_with_finite_is(dtype, log_is, policy_shift, old_first):
+    old = torch.tensor([[old_first, -log_is], [-1.0, -1.0]], dtype=dtype)
+    rollout = torch.tensor([[old_first - log_is, 0.0], [-1.0, -1.0]], dtype=dtype)
+    logp = old.clone()
+    logp[0, 0] += policy_shift
+    logp.requires_grad_(True)
+    advantages = torch.tensor([[-1.0, 1.0], [1.0, 1.0]], dtype=dtype)
+    mask = torch.ones_like(logp)
+
+    # The geometric-mean gate passes, and both operands are finite, but their product overflows.
+    weights = (old - rollout).exp()
+    ratio = (logp - old).clamp(min=-20.0, max=20.0).exp()
+    base_loss = -torch.min(ratio * advantages, ratio.clamp(0.8, 1.2) * advantages)
+    assert torch.isfinite(weights).all() and torch.isfinite(base_loss).all()
+    assert not torch.isfinite(weights[0, 0] * base_loss[0, 0])
+
+    loss_fn = PolicyLoss(is_correction_level="seq", is_correction_threshold=[0.5, 5.0])
+    loss, _, _, _, filtered = loss_fn(logp, old, advantages, action_mask=mask, rollout_log_probs=rollout)
+    loss.backward()
+
+    torch.testing.assert_close(loss, torch.tensor(-0.5, dtype=dtype))
+    torch.testing.assert_close(filtered, torch.tensor(0.5))
+    assert torch.isfinite(logp.grad).all()
+    assert torch.all(logp.grad[0] == 0)
+    torch.testing.assert_close(logp.grad[1], torch.full((2,), -0.25, dtype=dtype))
+
+
 def test_binary_kl_trust_region_masks_tokens_and_sequences():
     # On-policy PPO ratio (old == logp) so the surrogate is the REINFORCE gradient. Token 0 is far off
     # the behavior policy (mu=1/3, pi=1), token 1 matches it (mu=pi=1/2). Token-level binary_kl drops
