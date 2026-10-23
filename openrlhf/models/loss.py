@@ -238,7 +238,7 @@ class PolicyLoss(nn.Module):
                 keep = (stat >= low) & (stat <= high)
                 coef = torch.where(keep, token_is, 0.0)
                 if seq_level:
-                    # The aggregate gate can pass even if weighted PPO contributions overflow.
+                    # Finite IS weights can overflow when multiplied by the PPO loss.
                     representable = torch.isfinite(coef * loss.detach())
                     if action_mask is not None:
                         representable = representable | ~action_mask.bool()
