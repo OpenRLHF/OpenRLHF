@@ -214,18 +214,17 @@ def reload_deepspeed_states(model, non_blocking=True):
 
     # if zero_stage == 3 and not adam_offload:
     import torch
-    from deepspeed.runtime.zero.offload_config import OffloadStateTypeEnum
     from deepspeed.runtime.zero.partition_parameters import PartitionedParamStatus
 
-    # Capture whether lp_params was offloaded *before* reload_states removes it from the set
-    lp_params_was_offloaded = OffloadStateTypeEnum.lp_params in getattr(model.optimizer, "offloaded_states", set())
+    # DS >= 0.16.5 offload_states includes lp_params; reload must sync the status too
+    lp_params_offloaded = version.parse(deepspeed.__version__) >= version.parse("0.16.5")
 
     model.reload_states(non_blocking=non_blocking)
 
     # DeepSpeed reload_states(lp_params) restores tensor.data to GPU but does NOT update
     # PartitionedParamStatus. Restore AVAILABLE so subsequent training/forward paths see
     # the params as resident (and the ZeRO-3 free-after-use logic works correctly).
-    if lp_params_was_offloaded:
+    if lp_params_offloaded:
         for p in model.module.parameters():
             if hasattr(p, "ds_tensor"):
                 p.ds_tensor.status = PartitionedParamStatus.AVAILABLE
