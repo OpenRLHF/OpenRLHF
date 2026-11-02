@@ -159,8 +159,6 @@ def test_should_check_integer_size_before_conversion(monkeypatch):
         def __int__(self):
             raise AssertionError("oversized integer should not be converted")
 
-    monkeypatch.setattr(
-        math_utils.sympy_parser, "parse_expr", lambda *args, **kwargs: OversizedInteger()
-    )
+    monkeypatch.setattr(math_utils.sympy_parser, "parse_expr", lambda *args, **kwargs: OversizedInteger())
 
     assert not math_utils.should_allow_eval("x**2")

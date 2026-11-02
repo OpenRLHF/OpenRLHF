@@ -335,12 +335,7 @@ def _parse_if_safe(expr: str) -> sympy.Expr | None:
         if any(too_large for _, too_large in children):
             return None, True
         values = [value for value, _ in children]
-        if (
-            node.func is sympy.Pow
-            and values[0] is None
-            and not node.args[0].free_symbols
-            and values[1] is not None
-        ):
+        if node.func is sympy.Pow and values[0] is None and not node.args[0].free_symbols and values[1] is not None:
             return None, True
         if node.func is sympy.Pow and values[0] is not None and values[1] is None:
             exponent = node.args[1]
@@ -385,9 +380,7 @@ def _parse_if_safe(expr: str) -> sympy.Expr | None:
                 result_bits = half + math.lgamma(half + 1) / math.log(2)
             else:
                 half = (argument + 1) // 2
-                result_bits = (
-                    math.lgamma(argument + 1) - half * math.log(2) - math.lgamma(half + 1)
-                ) / math.log(2)
+                result_bits = (math.lgamma(argument + 1) - half * math.log(2) - math.lgamma(half + 1)) / math.log(2)
             if result_bits > MAX_NUMERIC_BITS:
                 return None, True
             return None, False
@@ -434,9 +427,7 @@ def _parse_if_safe(expr: str) -> sympy.Expr | None:
             return None, node.is_number is True
 
         evaluated[node] = (
-            sympy.Rational(value.numerator, value.denominator)
-            if isinstance(value, Fraction)
-            else sympy.Integer(value)
+            sympy.Rational(value.numerator, value.denominator) if isinstance(value, Fraction) else sympy.Integer(value)
         )
         return value, bit_size(value) > MAX_NUMERIC_BITS
 
