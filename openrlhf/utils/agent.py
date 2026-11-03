@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from itertools import cycle
@@ -36,7 +37,11 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
 
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine, images=None):
         # Treat each AgentInstance as an isolated environment; bind every prompt to its own independent instance
-        agent_instance = self.agent_instance_cls()
+        # __new__ + explicit __init__ call so that `async def __init__` (Ray-actor style) also works
+        agent_instance = self.agent_instance_cls.__new__(self.agent_instance_cls)
+        init_result = agent_instance.__init__()
+        if inspect.isawaitable(init_result):
+            await init_result
 
         # Initialize with reset function
         initial_states = {"observation": prompt, "label": label}
