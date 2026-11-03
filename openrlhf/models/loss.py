@@ -236,6 +236,12 @@ class PolicyLoss(nn.Module):
                 filtered = (stat < low) | (stat > high)
             else:  # mask: drop out-of-band units, survivors keep their per-token IS weight
                 keep = (stat >= low) & (stat <= high)
+                if seq_level:
+                    # An aggregate gate can pass even when an individual token weight overflows.
+                    finite = torch.isfinite(token_is)
+                    active_finite = finite if action_mask is None else finite | ~action_mask.bool()
+                    keep = keep & active_finite.all(dim=-1, keepdim=True)
+                    token_is = torch.where(finite, token_is, 0.0)
                 coef = torch.where(keep, token_is, 0.0)
                 filtered = ~keep
             loss = coef * loss
