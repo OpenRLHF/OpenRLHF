@@ -62,6 +62,8 @@ class GenerateSamplesActor:
             tokenizer=tokenizer,
             vllm_engines=vllm_engines,
         )
+        self._sample_buffer_ref = None
+        self._dataloader_exhausted = False
 
         self.vllm_lock = vllm_lock
         self._partial_rollout = getattr(strategy.args.train, "partial_rollout_enable", False)
@@ -73,8 +75,12 @@ class GenerateSamplesActor:
     def get_max_steps(self):
         return self.max_steps
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict, sample_buffer=None, dataloader_exhausted=False):
         self.prompts_dataloader.load_state_dict(state_dict)
+        self.samples_generator._sample_buffer = list(sample_buffer or [])
+        self.samples_generator._dataloader_iter = iter(()) if dataloader_exhausted else iter(self.prompts_dataloader)
+        self._dataloader_exhausted = dataloader_exhausted
+        self._sample_buffer_ref = ray.put(self.samples_generator._sample_buffer) if sample_buffer else None
 
     def _should_eval(self, global_step):
         return (
@@ -139,12 +145,33 @@ class GenerateSamplesActor:
                     if not self._partial_rollout:
                         ray.get(self.vllm_lock.release.remote())
 
+                if (
+                    self.samples_generator._dataloader_iter is None
+                    or total_consumed_prompts >= (episode + 1) * dataset_length
+                ):
+                    self._dataloader_exhausted = True
+                elif prompts_consumed:
+                    self._dataloader_exhausted = False
+
+                # Queue entries share one generated tail and identify its remaining suffix.
+                # This avoids serializing overlapping Experience lists for every training chunk.
+                if prompts_consumed and self.samples_generator._sample_buffer:
+                    self._sample_buffer_ref = ray.put(self.samples_generator._sample_buffer)
+                elif not self.samples_generator._sample_buffer:
+                    self._sample_buffer_ref = None
+
                 produced = bool(rollout_samples)
                 if produced:
                     client_states = {
                         "episode": episode,
                         "total_consumed_prompts": total_consumed_prompts,
                         "data_loader_state_dict": self.prompts_dataloader.state_dict(),
+                        "dataloader_exhausted": self._dataloader_exhausted,
+                        "sample_buffer_state": (
+                            (self._sample_buffer_ref, len(self.samples_generator._sample_buffer))
+                            if self._sample_buffer_ref is not None
+                            else None
+                        ),
                     }
                     self.rollout_queue.put(
                         (rollout_samples, client_states, filter_pass_rate, generation_time), block=True
@@ -245,7 +272,14 @@ class TrainingActor(BasePPOTrainer):
 
             client_states.update({"global_step": global_step})
             self._latest_client_states = client_states
-            self.save_logs_and_checkpoints(global_step, status, client_states)
+            checkpoint_states = client_states
+            if global_step % self.args.ckpt.save_steps == 0:
+                checkpoint_states = dict(client_states)
+                sample_buffer_state = checkpoint_states.pop("sample_buffer_state", None)
+                if sample_buffer_state:
+                    sample_buffer_ref, size = sample_buffer_state
+                    checkpoint_states["sample_buffer"] = ray.get(sample_buffer_ref)[-size:]
+            self.save_logs_and_checkpoints(global_step, status, checkpoint_states)
 
         if self.wandb_logger:
             self.wandb_logger.close()
@@ -336,7 +370,11 @@ class PPOTrainerAsync:
         if global_step > 0:
             ray.get(
                 [
-                    self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
+                    self.generator_actor.load_state_dict.remote(
+                        checkpoint_states["data_loader_state_dict"],
+                        checkpoint_states.get("sample_buffer"),
+                        checkpoint_states.get("dataloader_exhausted", False),
+                    ),
                     self.trainer_actor.broadcast_to_vllm.remote(),
                 ]
             )
