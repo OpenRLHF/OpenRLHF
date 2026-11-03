@@ -1,4 +1,3 @@
-import asyncio
 import time
 
 import ray
@@ -8,30 +7,13 @@ from tqdm import tqdm
 from openrlhf.trainer.ppo_trainer import BasePPOTrainer, compute_eval_metrics, prepare_datasets
 from openrlhf.trainer.ppo_utils.samples_generator import SamplesGenerator
 from openrlhf.trainer.ray.launcher import RayActorGroup
+from openrlhf.trainer.ray.signal_actor import SignalActor
 from openrlhf.trainer.ray.vllm_engine import batch_vllm_engine_call
 from openrlhf.utils.deepspeed import DeepspeedStrategy
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.utils import get_tokenizer
 
 logger = init_logger(__name__)
-
-
-@ray.remote(num_cpus=0)
-class VLLMLock:
-    """Cross-actor mutex for vLLM critical section.
-
-    Ensures generation and weight broadcast do not overlap on the same vLLM engines,
-    so every sample in a batch is generated with consistent weights.
-    """
-
-    def __init__(self):
-        self._lock = asyncio.Lock()
-
-    async def acquire(self):
-        await self._lock.acquire()
-
-    async def release(self):
-        self._lock.release()
 
 
 @ray.remote
@@ -42,7 +24,7 @@ class GenerateSamplesActor:
         strategy,
         vllm_engines,
         *,
-        vllm_lock,
+        signal,
         rollout_queue,
         rollout_slots,
         **generate_kwargs,
@@ -63,7 +45,7 @@ class GenerateSamplesActor:
             vllm_engines=vllm_engines,
         )
 
-        self.vllm_lock = vllm_lock
+        self.signal = signal
         self._partial_rollout = getattr(strategy.args.train, "partial_rollout_enable", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
@@ -116,18 +98,18 @@ class GenerateSamplesActor:
                 if self._should_eval(global_step) and not self._eval_just_done:
                     self._eval_just_done = True
                     self._last_eval_step = global_step
-                    ray.get(self.vllm_lock.acquire.remote())
+                    ray.get(self.signal.set_generating.remote())
                     try:
                         eval_metrics = self._run_eval()
                     finally:
-                        ray.get(self.vllm_lock.release.remote())
+                        ray.get(self.signal.set_idle.remote())
                     self.rollout_queue.put(("eval", global_step, eval_metrics), block=True)
                     continue
                 self._eval_just_done = False
 
                 if not self._partial_rollout:
-                    # Normal async: hold lock so weight broadcast cannot overlap with generation.
-                    ray.get(self.vllm_lock.acquire.remote())
+                    # Normal async: hold signal so weight broadcast cannot overlap with generation.
+                    ray.get(self.signal.set_generating.remote())
                 try:
                     t0 = time.time()
                     rollout_samples, filter_pass_rate, prompts_consumed, is_exhausted = (
@@ -137,7 +119,7 @@ class GenerateSamplesActor:
                     total_consumed_prompts += prompts_consumed
                 finally:
                     if not self._partial_rollout:
-                        ray.get(self.vllm_lock.release.remote())
+                        ray.get(self.signal.set_idle.remote())
 
                 produced = bool(rollout_samples)
                 if produced:
@@ -176,7 +158,7 @@ class TrainingActor(BasePPOTrainer):
         reference_model_group,
         vllm_engines,
         *,
-        vllm_lock,
+        signal,
         rollout_queue,
         rollout_slots,
     ):
@@ -194,7 +176,7 @@ class TrainingActor(BasePPOTrainer):
             tokenizer,
         )
 
-        self.vllm_lock = vllm_lock
+        self.signal = signal
         self._partial_rollout = getattr(strategy.args.train, "partial_rollout_enable", False)
         self.rollout_queue = rollout_queue
         self.rollout_slots = rollout_slots
@@ -253,16 +235,17 @@ class TrainingActor(BasePPOTrainer):
             self.tensorboard_logger.close()
 
     def broadcast_to_vllm(self):
-        # Lock prevents weight broadcast from overlapping with eval generation.
-        ray.get(self.vllm_lock.acquire.remote())
-        if self._partial_rollout:
-            batch_vllm_engine_call(self.vllm_engines, "pause_generation")
+        ray.get(self.signal.set_update_weights.remote())
         try:
-            super().broadcast_to_vllm()
-        finally:
             if self._partial_rollout:
-                batch_vllm_engine_call(self.vllm_engines, "resume_generation")
-            ray.get(self.vllm_lock.release.remote())
+                batch_vllm_engine_call(self.vllm_engines, "pause_generation")
+            try:
+                super().broadcast_to_vllm()
+            finally:
+                if self._partial_rollout:
+                    batch_vllm_engine_call(self.vllm_engines, "resume_generation")
+        finally:
+            ray.get(self.signal.set_idle.remote())
 
 
 @ray.remote
@@ -296,16 +279,16 @@ class PPOTrainerAsync:
         for _ in range(queue_size):
             self.rollout_slots.put(0, block=True)
 
-        # Lock ensures eval generation and weight broadcast never overlap.
-        # In partial_rollout mode, normal generation runs without the lock
+        # SignalActor enforces mutual exclusion between eval/generation and weight broadcast.
+        # In partial_rollout mode, normal generation runs without the signal
         # (pause/resume handles weight sync), but eval still needs it.
-        vllm_lock = VLLMLock.remote()
+        signal = SignalActor.remote()
 
         self.generator_actor = GenerateSamplesActor.remote(
             pretrain=pretrain,
             strategy=strategy,
             vllm_engines=vllm_engines,
-            vllm_lock=vllm_lock,
+            signal=signal,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
             **generate_kwargs,
@@ -319,7 +302,7 @@ class PPOTrainerAsync:
             reward_model_group=reward_model_group,
             reference_model_group=reference_model_group,
             vllm_engines=vllm_engines,
-            vllm_lock=vllm_lock,
+            signal=signal,
             rollout_queue=self.rollout_queue,
             rollout_slots=self.rollout_slots,
         )
