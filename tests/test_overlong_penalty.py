@@ -54,9 +54,9 @@ class TestOverlongPerSampleLimit:
                 overlong_penalty_factor=factor,
                 max_len=max_len,
             )
-            assert exp.rewards[0] == pytest.approx(-1.0), (
-                f"prompt_len={prompt_len}: expected -1.0, got {exp.rewards[0]}"
-            )
+            assert exp.rewards[0] == pytest.approx(
+                -1.0
+            ), f"prompt_len={prompt_len}: expected -1.0, got {exp.rewards[0]}"
 
     def test_short_response_no_penalty(self, lp):
         """A response well below the threshold should not be penalized."""
