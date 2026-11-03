@@ -32,7 +32,7 @@ OpenRLHF is **the first** high-performance, production-ready open-source RLHF fr
 
 📚 **Learn More**: [Documentation](https://openrlhf.readthedocs.io/) | [Slides](https://docs.google.com/presentation/d/1JRhB1d7csofx0PIZBmfyBdMluxNd5JLPpUHrrvVhGnk/edit?usp=sharing) | [Technical Report](https://www.researchgate.net/publication/393414548_OpenRLHF_An_Easy-to-use_Scalable_and_High-performance_RLHF_Framework) | [Video](https://www.bilibili.com/video/BV1dv2jBxEQG/)
 
-🦋 **Recommended: [Molt](https://github.com/NVIDIA-NeMo/labs-molt)** — a PyTorch / Hugging Face-native RL framework powered by [NVIDIA AutoModel](https://github.com/NVIDIA-NeMo/Automodel), with fully asynchronous training, multimodal and multi-turn agents, and large-scale MoE support. **[Get started →](https://github.com/NVIDIA-NeMo/labs-molt#-installation)**
+🦋 **Recommended: [Molt](https://github.com/NVIDIA-NeMo/labs-molt)** — a lightweight, PyTorch / Hugging Face-native RL framework powered by [NVIDIA AutoModel](https://github.com/NVIDIA-NeMo/Automodel), with fully asynchronous training, multimodal and multi-turn agents, and large-scale MoE support. **[Get started →](https://github.com/NVIDIA-NeMo/labs-molt#-installation)**
 
 ## 📖 Table of Contents
 
