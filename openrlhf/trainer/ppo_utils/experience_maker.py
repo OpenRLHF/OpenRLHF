@@ -271,7 +271,13 @@ class RemoteExperienceMaker:
         elif args.algo.advantage.estimator in ["reinforce_baseline", "dr_grpo"]:
             rewards = rewards - rewards.mean(-1, keepdim=True)
         elif args.algo.advantage.estimator == "group_norm":
+            group_max = rewards.max(-1, keepdim=True).values
+            group_min = rewards.min(-1, keepdim=True).values
             rewards = (rewards - rewards.mean(-1, keepdim=True)) / (rewards.std(-1, keepdim=True) + 1e-9)
+            # A group whose rewards are all equal carries no learning signal,
+            # but float32 group statistics leave a residue around 1e-8 that
+            # the 1e-9 epsilon above amplifies to advantages close to +-1.
+            rewards = torch.where(group_max == group_min, torch.zeros_like(rewards), rewards)
         elif args.algo.advantage.estimator == "flash_reinforce":
             # FlashREINFORCE: baseline = mean over the whole rollout batch (the single-rollout
             # regime has no prompt group), no whitening below.
