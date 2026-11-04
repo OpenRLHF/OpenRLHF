@@ -49,6 +49,38 @@ class WorkerWrap:
 
         del weight
 
+    def update_weight_sparse(self, name, dtype, shape, nnz, empty_cache=False):
+        """Receive only the elements changed since the last sync and scatter them in.
+        """
+        import math
+
+        import torch
+
+        from openrlhf.utils.sparse_sync import index_dtype, sparse_load_context
+
+        assert dtype == self.model_config.dtype, f"mismatch dtype: src {dtype}, dst {self.model_config.dtype}"
+        if nnz == 0:
+            return
+
+        indices = torch.empty(nnz, dtype=index_dtype(math.prod(shape)), device="cuda")
+        values = torch.empty(nnz, dtype=dtype, device="cuda")
+        if self._model_update_with_ray:
+            import ray.util.collective as collective
+
+            collective.broadcast(indices, 0, group_name=self._model_update_group)
+            collective.broadcast(values, 0, group_name=self._model_update_group)
+        else:
+            stream = torch.cuda.current_stream()
+            self._model_update_group.broadcast(indices, src=0, stream=stream)
+            self._model_update_group.broadcast(values, src=0, stream=stream)
+
+        weight = torch.full(shape, float("nan"), dtype=dtype, device="cuda")
+        weight.view(-1)[indices.long()] = values
+        with sparse_load_context():
+            self.model_runner.model.load_weights(weights=[(name, weight)])
+
+        del weight
+
     def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles=None, empty_cache=False):
         import torch
         from openrlhf.trainer.ray.utils import get_physical_gpu_id
