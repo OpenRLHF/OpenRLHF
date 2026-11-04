@@ -1,7 +1,19 @@
 import torch
 import torch.distributed as dist
-from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-from flash_attn.utils.distributed import all_gather
+
+try:
+    from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
+    from flash_attn.utils.distributed import all_gather
+except ImportError as _e:
+    # flash-attn is optional since transformers>=5.15 provides
+    # kernels-community/flash-attn2 fallback. Ring attention and the
+    # helpers below only work when the package is installed.
+    raise ImportError(
+        "flash-attn is required for ring attention and bert_padding helpers, "
+        "but it is not installed. Either `pip install flash-attn==2.8.3` or "
+        "install the pre-built community kernels with `pip install -U kernels`. "
+        "Original error: " + str(_e)
+    ) from _e
 
 RING_ATTN_GROUP = None
 

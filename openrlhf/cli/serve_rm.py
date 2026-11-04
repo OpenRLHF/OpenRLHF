@@ -97,7 +97,7 @@ if __name__ == "__main__":
         "--ds.attn_implementation",
         type=str,
         default="flash_attention_2",
-        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/flash-attn2, kernels-community/flash-attn3, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument(
         "--ds.experts_implementation",

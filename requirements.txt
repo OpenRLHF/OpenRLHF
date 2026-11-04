@@ -4,7 +4,13 @@ bitsandbytes
 datasets
 deepspeed==0.19.6
 einops
-flash-attn==2.8.3
+# flash-attn is optional. transformers>=5.15 natively supports
+# attn_implementation="kernels-community/flash-attn2" with automatic Hub
+# fallback when the local flash-attn package is absent.
+# Install manually only if you want the ring-attention / cross-entropy
+# helpers that ship inside flash_attn (pip install flash-attn==2.8.3).
+# For pre-built community kernels: pip install -U kernels
+# flash-attn==2.8.3
 grpcio>=1.74.0
 huggingface_hub>=1.0.0
 isort
