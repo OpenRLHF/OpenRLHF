@@ -168,7 +168,7 @@ class ActorPPOTrainer(ABC):
             pin_memory=self.dataloader_pin_memory,
             collate_fn=self.replay_buffer.collate_fn,
         )
-        device = torch.cuda.current_device()
+        device = torch.accelerator.current_device_index()
 
         status_list = []
         status_mean = {}
@@ -362,9 +362,13 @@ class ActorPPOTrainer(ABC):
         if self.ema_model:
             if self.args.train.dynamic_batch_enable:
                 if self.replay_buffer.dynamic_optimizer_step[step]:
-                    self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+                    self.strategy.moving_average(
+                        self.actor, self.ema_model, self.ema_beta, torch.accelerator.current_accelerator().type
+                    )
             else:
-                self.strategy.moving_average(self.actor, self.ema_model, self.ema_beta, "cuda")
+                self.strategy.moving_average(
+                    self.actor, self.ema_model, self.ema_beta, torch.accelerator.current_accelerator().type
+                )
 
         # Per-token losses (0-D tensors, shape carries weighting info for ppo_train)
         metrics = {"policy_loss": actor_loss.detach()}
@@ -597,12 +601,12 @@ class PolicyModelActor(BaseModelActor):
 
     def fit(self, kl_ctl: float = 0):
         """Train actor model with the replay buffer."""
-        torch.cuda.empty_cache()
+        torch.accelerator.empty_cache()
         self.actor.train()
         status = self.trainer.ppo_train(kl_ctl)
         self.trainer.replay_buffer.clear()
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        torch.accelerator.empty_cache()
+        torch.accelerator.synchronize()
         return status
 
     def save_model(self):
@@ -624,7 +628,7 @@ class PolicyModelActor(BaseModelActor):
         mm_train_inputs_list=None,
     ) -> torch.Tensor:
         """Generates actor values."""
-        device = torch.cuda.current_device()
+        device = torch.accelerator.current_device_index()
 
         # VLM: merge pre-processed multimodal inputs from all samples in batch
         mm_inputs = {}
