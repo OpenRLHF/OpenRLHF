@@ -353,7 +353,7 @@ def last_boxed_only_string(string: str) -> str | None:
 
 
 def remove_boxed(value: str) -> str | None:
-    left = "\\boxed{"
+    left = "\\fbox{" if value.startswith("\\fbox") else "\\boxed{"
     try:
         assert value[: len(left)] == left
         assert value[-1] == "}"
