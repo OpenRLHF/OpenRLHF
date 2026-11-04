@@ -417,29 +417,36 @@ class ActorPPOTrainer(ABC):
         torch.cuda.empty_cache()
         model = self.actor.model.module
         count = 0
+        # vLLM engines hold weights in bf16 (hardcoded dtype in create_vllm_engines), while LoRA
+        # adapters gathered under ZeRO-3 are fp32 (peft upcasts them) — cast before sync.
+        vllm_dtype = torch.bfloat16
+
+        def _to_vllm_dtype(param):
+            return param.data if param.data.dtype == vllm_dtype else param.data.to(vllm_dtype)
 
         def _broadcast_param(param, count, num_params):
             use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
             # Fire all vllm engines for broadcast
             if torch.distributed.get_rank() == 0:
+                data = _to_vllm_dtype(param)
                 shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
                 refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
+                    engine.update_weight.remote(name, dtype=data.dtype, shape=shape, empty_cache=count == num_params)
                     for engine in self.vllm_engines
                 ]
 
                 if use_ray:
                     import ray.util.collective as collective
 
-                    collective.broadcast(param.data, 0, group_name=self._model_update_group)
+                    collective.broadcast(data, 0, group_name=self._model_update_group)
                 else:
-                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
+                    self._model_update_group.broadcast(data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
 
         def _handle_cuda_ipc(param, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
 
-            weight = param.data.clone()
+            weight = _to_vllm_dtype(param).clone()
             ipc_handle = reduce_tensor(weight)
 
             ipc_handle = {get_physical_gpu_id(): ipc_handle}
@@ -455,7 +462,7 @@ class ActorPPOTrainer(ABC):
                 refs = [
                     engine.update_weight_cuda_ipc.remote(
                         name,
-                        dtype=param.dtype,
+                        dtype=weight.dtype,
                         shape=shape,
                         ipc_handles=ipc_handles,
                         empty_cache=count == num_params,
