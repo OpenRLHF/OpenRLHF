@@ -70,3 +70,81 @@ def test_preference_eval_weights_each_pair_equally(trainer_name, batch_size, met
 
     assert logged[0][f"eval/{metric}"] == pytest.approx(expected)
     assert model.training
+
+
+@pytest.mark.parametrize("ipo,label_smoothing", [(False, 0.0), (False, 0.1), (True, 0.0)])
+@pytest.mark.parametrize("response_lengths", [([1, 1], [1, 1]), ([2, 2], [2, 2]), ([1, 3], [2, 4])])
+@pytest.mark.parametrize("extra_padding", [0, 3])
+def test_dpo_forward_normalizes_only_ipo(monkeypatch, ipo, label_smoothing, response_lengths, extra_padding):
+    import sys
+
+    from transformers.modeling_outputs import MoeCausalLMOutputWithPast
+
+    from tests.test_loss_aggregation import _loss_module
+    from tests.test_sft_trainer import _load_module
+
+    root = Path(__file__).resolve().parents[1]
+    # Isolate optional GPU package imports; load the full native trainer and sampler.
+    monkeypatch.setitem(sys.modules, "openrlhf.models", SimpleNamespace(DPOLoss=_loss_module.DPOLoss))
+    _load_module(monkeypatch, "openrlhf.utils.distributed_sampler", root / "openrlhf/utils/distributed_sampler.py")
+    module = _load_module(monkeypatch, "_dpo_normalization_test", root / "openrlhf/trainer/dpo_trainer.py")
+    trainer = module.DPOTrainer.__new__(module.DPOTrainer)
+    trainer.args = SimpleNamespace(model=SimpleNamespace(ipo_enable=ipo))
+    trainer.strategy = SimpleNamespace(ring_attn_group=None)
+    trainer.tokenizer = SimpleNamespace(pad_token_id=0)
+    trainer.loss_fn = _loss_module.DPOLoss(beta=0.2, label_smoothing=label_smoothing, ipo=ipo)
+    prompt_lengths = [1, 2]
+    chosen_lengths, rejected_lengths = response_lengths
+    groups = []
+    for offset, lengths in zip([0, 5], response_lengths):
+        rows = [
+            torch.cat([torch.arange(1, prompt + 1), torch.arange(prompt + 1, prompt + length + 1) + offset])
+            for prompt, length in zip(prompt_lengths, lengths)
+        ]
+        ids = torch.nn.utils.rnn.pad_sequence(rows, batch_first=True)
+        groups.append(F.pad(ids, (0, extra_padding)))
+    chosen, rejected = groups
+    weight = torch.tensor(0.1, requires_grad=True)
+    aux = torch.tensor(0.7)
+
+    def policy(ids, **kwargs):
+        return -4 + weight * ids[:, 1:].float(), MoeCausalLMOutputWithPast(aux_loss=aux)
+
+    def reference(ids, **kwargs):
+        return -4 + 0.05 * ids[:, 1:].float(), {}
+
+    pc, pr, returned_aux, nll = trainer.concatenated_forward(
+        policy, chosen, chosen.ne(0), rejected, rejected.ne(0), prompt_lengths
+    )
+    rc, rr, _, _ = trainer.concatenated_forward(
+        reference, chosen, chosen.ne(0), rejected, rejected.ne(0), prompt_lengths
+    )
+    # Independent per-response slices exclude prompts and padding, without reusing the trainer's masks.
+    expected_policy, expected_reference, chosen_nll = [], [], []
+    for group, lengths in zip(groups, [chosen_lengths, rejected_lengths]):
+        for ids, prompt, length in zip(group, prompt_lengths, lengths):
+            tokens = ids[prompt : prompt + length].float()
+            policy_tokens = -4 + weight * tokens
+            reference_tokens = -4 + 0.05 * tokens
+            expected_policy.append(policy_tokens.mean() if ipo else policy_tokens.sum())
+            expected_reference.append(reference_tokens.mean() if ipo else reference_tokens.sum())
+            if group is chosen:
+                chosen_nll.append(-policy_tokens.mean())
+    ep, er = torch.stack(expected_policy), torch.stack(expected_reference)
+    torch.testing.assert_close(torch.cat([pc, pr]), ep)
+    torch.testing.assert_close(torch.cat([rc, rr]), er)
+    torch.testing.assert_close(nll, torch.stack(chosen_nll).mean())
+    assert returned_aux is aux
+
+    gap = (ep[:2] - ep[2:]) - (er[:2] - er[2:])
+    expected_loss = (
+        (gap - 1 / (2 * 0.2)).square().mean()
+        if ipo
+        else (-(1 - label_smoothing) * F.logsigmoid(0.2 * gap) - label_smoothing * F.logsigmoid(-0.2 * gap)).mean()
+    )
+    actual_loss = trainer.loss_fn(pc, pr, rc, rr)[0]
+    torch.testing.assert_close(actual_loss, expected_loss)
+    # Include the optional chosen-NLL term to guard its independent normalization and gradient.
+    actual_grad = torch.autograd.grad(actual_loss + 0.3 * nll, weight, retain_graph=True)[0]
+    expected_grad = torch.autograd.grad(expected_loss + 0.3 * torch.stack(chosen_nll).mean(), weight)[0]
+    torch.testing.assert_close(actual_grad, expected_grad)
