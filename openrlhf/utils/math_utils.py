@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import signal
 import threading
+from itertools import groupby
 
 import sympy
 from pylatexenc import latex2text
@@ -258,6 +259,25 @@ def _normalize(expr: str | None) -> str | None:
     return expr
 
 
+_UNIT_PATTERN = re.compile(
+    r"(?:\b|(?<=\d))(cm|centimeters?|meters?|miles?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|feet|foot|inches?|yards?|degrees?)\b",
+    re.IGNORECASE,
+)
+_UNIT_NAMES = {
+    "cm": "centimeter",
+    "centimeters": "centimeter",
+    "feet": "foot",
+    "inches": "inch",
+    "degrees": "degree",
+}
+
+
+def _extract_units(answer: str) -> tuple[str, ...]:
+    answer = re.sub(r"\\text\{\s*m\s*\}", " meter ", answer)
+    units = [_UNIT_NAMES.get(unit.lower(), unit.lower().removesuffix("s")) for unit in _UNIT_PATTERN.findall(answer)]
+    return tuple(unit for unit, _ in groupby(units))
+
+
 BAD_SUBSTRINGS = ["^{", "^("]
 BAD_REGEXES = [r"\^[0-9]+\^", r"\^[0-9][0-9]+"]
 TUPLE_CHARS = "()[]"
@@ -374,10 +394,10 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     given_normalized = _normalize(given_answer)
     if ground_truth_normalized is None:
         return False
-    if ground_truth_normalized == given_normalized:
-        return True
     if not given_normalized:
         return False
+    if ground_truth_normalized == given_normalized:
+        return True
     ground_truth_elems = split_tuple(ground_truth_normalized)
     given_elems = split_tuple(given_normalized)
     if len(ground_truth_elems) > 1 and (
@@ -422,4 +442,8 @@ def grade_answer(given_answer: str, ground_truth: str) -> bool:
         return False
     ground_truth = str(ground_truth)
     given_answer = str(given_answer)
+    ground_truth_units = _extract_units(ground_truth)
+    given_answer_units = _extract_units(given_answer)
+    if ground_truth_units and given_answer_units and ground_truth_units != given_answer_units:
+        return False
     return grade_answer_mathd(given_answer, ground_truth) or grade_answer_sympy(given_answer, ground_truth)
