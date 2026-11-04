@@ -227,6 +227,8 @@ class PolicyLoss(nn.Module):
                 q = old_log_probs.exp().clamp(1e-6, 1 - 1e-6)
                 if self.is_correction_gating == "binary_kl":
                     stat = p * (p / q).log() + (1 - p) * ((1 - p) / (1 - q)).log()
+                    # Roundoff near equal probabilities must not trigger the lower-bound rejection.
+                    stat = stat.clamp(min=0)
                 else:  # tv
                     stat = (p - q).abs()
                 if seq_level:
