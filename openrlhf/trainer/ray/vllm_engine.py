@@ -11,6 +11,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from vllm.inputs import TokensPrompt
 from vllm.utils import random_uuid
 
+from openrlhf.env_utils import configure_vllm_allocator_env
 from openrlhf.utils.agent import AgentExecutorBase, SingleTurnAgentExecutor
 
 from .utils import get_bundle_indices, ray_noset_visible_devices
@@ -48,7 +49,12 @@ class RolloutRayActor:
             bundle_indices=bundle_indices,
             num_gpus=kwargs.pop("num_gpus"),
         )
-        self._configure_vllm_env(version, vllm, kwargs.pop("full_determinism", False))
+        self._configure_vllm_env(
+            version,
+            vllm,
+            kwargs.pop("full_determinism", False),
+            bool(kwargs.get("enable_sleep_mode", False)),
+        )
 
         # Execution mode mapping:
         # - custom agent executor: user-provided AgentExecutorBase subclass
@@ -87,7 +93,11 @@ class RolloutRayActor:
             os.environ["VLLM_RAY_BUNDLE_INDICES"] = ",".join(map(str, bundle_indices))
             print(f"creating LLM with bundle_indices={bundle_indices}")
 
-    def _configure_vllm_env(self, version, vllm, full_determinism: bool):
+    def _configure_vllm_env(self, version, vllm, full_determinism: bool, enable_sleep_mode: bool):
+        updated_allocator_envs = configure_vllm_allocator_env(enable_sleep_mode)
+        if updated_allocator_envs:
+            print("Disabled expandable CUDA allocator segments for vLLM in " + ", ".join(updated_allocator_envs))
+
         assert version.parse(vllm.__version__) > version.parse(
             "0.8.5"
         ), "Streaming VLLM version must be greater than 0.8.5"
