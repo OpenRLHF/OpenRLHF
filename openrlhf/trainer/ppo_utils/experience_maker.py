@@ -153,33 +153,52 @@ class RemoteExperienceMaker:
         # Actor model (receives mm_train_inputs_list for VLM)
         action_log_probs_ref = self._dispatch_forward(
             self.actor_model_group,
-            args.train.colocate_all or args.train.colocate_actor_ref,
+            args.train.colocate_all,
             **vlm_forward_kwargs,
         )
 
         # Critic model
         if self.critic_model_group is not None:
-            if args.train.colocate_critic_reward and r_refs is not None:
+            # Critic shares GPUs with the reward model, so the reward forward has to be
+            # released before the critic is dispatched.
+            if not args.train.colocate_all and args.train.colocate_critic_reward and r_refs is not None:
                 ray.get(r_refs)
                 ray.get(self.reward_model_group.async_run_method(method_name="empty_cache"))
 
             value_ref = self._dispatch_forward(
                 self.critic_model_group,
-                args.train.colocate_all or args.train.colocate_critic_reward,
+                args.train.colocate_all,
                 **forward_kwargs,
             )
         else:
             value_ref = dummy_ref
 
+        # Reference shares GPUs with the actor model, so the actor forward has to be
+        # released before the reference is dispatched.
+        if not args.train.colocate_all and args.train.colocate_actor_ref:
+            ray.get(action_log_probs_ref)
+            ray.get(self.actor_model_group.async_run_method(method_name="empty_cache"))
+
         # Reference model (also receives mm_train_inputs_list for VLM)
         if self.initial_model_group is not None:
             base_action_log_probs_ref = self._dispatch_forward(
                 self.initial_model_group,
-                args.train.colocate_all or args.train.colocate_actor_ref,
+                args.train.colocate_all,
                 **vlm_forward_kwargs,
             )
         else:
             base_action_log_probs_ref = dummy_ref
+
+        # Release the co-located caches before the training step. Deferred to here so
+        # the sync never blocks a dispatch that runs on a different GPU.
+        # Skipped when colocate_all, which already released every model inline.
+        if not args.train.colocate_all:
+            if args.train.colocate_critic_reward and self.critic_model_group is not None:
+                ray.get(value_ref)
+                ray.get(self.critic_model_group.async_run_method(method_name="empty_cache"))
+            if args.train.colocate_actor_ref and self.initial_model_group is not None:
+                ray.get(base_action_log_probs_ref)
+                ray.get(self.initial_model_group.async_run_method(method_name="empty_cache"))
 
         # ── Gather and flatten results ──
 
