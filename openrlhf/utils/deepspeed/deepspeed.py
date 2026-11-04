@@ -512,7 +512,9 @@ class DeepspeedStrategy(ABC):
                         else:
                             # TODO: use prefiltering for efficiency
                             params_to_fetch = _z3_params_to_fetch([param, param_ema])
-                            with deepspeed.zero.GatheredParameters(params_to_fetch, enabled=len(params_to_fetch) > 0):
+                            with deepspeed.zero.GatheredParameters(
+                                params_to_fetch, modifier_rank=0, enabled=len(params_to_fetch) > 0
+                            ):
                                 data = param.data.to(device)
                                 param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
 
