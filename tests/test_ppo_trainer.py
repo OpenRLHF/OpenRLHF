@@ -176,3 +176,61 @@ def test_restore_checkpoint_metric_compatibility(ppo_module, state, best, latest
     trainer.restore_best_checkpoint_state(state)
     assert trainer.best_eval_metric_value == best
     assert trainer._latest_eval_metric_value == latest
+
+
+@pytest.mark.parametrize("dtype", ["bool", "int32", "int64", "float16", "bfloat16", "float32", "float64"])
+@pytest.mark.parametrize("n_samples", [1, 2, 4])
+@pytest.mark.parametrize("all_zero", [False, True])
+def test_eval_metrics_accept_integer_rewards(ppo_module, dtype, n_samples, all_zero):
+    import torch
+
+    values = [0 if all_zero else i % 2 for i in range(3 * n_samples)]
+    samples = [
+        SimpleNamespace(
+            prompts=[f"p{i // n_samples}"],
+            rewards=torch.tensor([value], dtype=getattr(torch, dtype)),
+            response_length=torch.tensor([i + 1]),
+            truncated=torch.tensor([all_zero]),
+        )
+        for i, value in enumerate(values)
+    ]
+    loader = [(["math", "math", "code"], ["p0", "p1", "p2"], ["", "", ""], [None] * 3)]
+    logs = ppo_module.compute_eval_metrics(loader, samples, n_samples)
+    for datasource, start, end in [("math", 0, 2 * n_samples), ("code", 2 * n_samples, 3 * n_samples)]:
+        assert logs[f"eval_{datasource}_pass1"] == sum(values[start:end]) / (end - start)
+        expected_pass_k = sum(max(values[i : i + n_samples]) for i in range(start, end, n_samples))
+        assert logs[f"eval_{datasource}_pass{n_samples}"] == expected_pass_k / ((end - start) / n_samples)
+        assert logs[f"eval_{datasource}_response_length_mean"] == (start + 1 + end) / 2
+        assert logs[f"eval_{datasource}_truncated_rate"] == float(all_zero)
+    assert logs["eval_num_samples"] == len(samples)
+    assert logs["eval_response_length_mean"] == (1 + len(samples)) / 2
+    assert logs["eval_truncated_rate"] == float(all_zero)
+    assert all(sample.rewards.dtype == getattr(torch, dtype) for sample in samples)
+
+
+@pytest.mark.parametrize(
+    "dtypes,values",
+    [
+        (["int64", "float32"], [0, 0.75]),
+        (["float16"] * 3, [0.1, 0.2, 0.4]),
+        (["bfloat16"] * 3, [0.1, 0.2, 0.4]),
+        (["float32"] * 3, [-0.5, 0.1, 0.8]),
+        (["float64"] * 3, [1.00000003, -1.0, 0.0]),
+    ],
+)
+def test_eval_metrics_preserve_floating_rewards(ppo_module, dtypes, values):
+    import torch
+
+    rewards = [torch.tensor([value], dtype=getattr(torch, dtype)) for dtype, value in zip(dtypes, values)]
+    samples = [SimpleNamespace(prompts=["p"], rewards=r, response_length=None, truncated=None) for r in rewards]
+    logs = ppo_module.compute_eval_metrics([(["math"], ["p"], [""], [None])], samples, len(samples))
+    original = torch.tensor(rewards)
+    assert logs == {
+        f"eval_math_pass{len(samples)}": original.max().float().item(),
+        "eval_math_pass1": original.mean().float().item(),
+        "eval_num_samples": float(len(samples)),
+    }
+
+
+def test_eval_metrics_empty_samples(ppo_module):
+    assert ppo_module.compute_eval_metrics([], [], 1) == {}
