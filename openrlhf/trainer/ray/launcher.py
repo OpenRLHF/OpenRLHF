@@ -244,9 +244,9 @@ class RayActorGroup:
         if self._num_gpus_per_node > 1 and pg is None:
             bundles = [{"GPU": 1, "CPU": 1} for _ in range(self._num_nodes * self._num_gpus_per_node)]
             if self._resources:
-                resources_name = list(self._resources.keys())[0]
                 for i in range(len(bundles)):
-                    bundles[i][resources_name] = self._num_resources_per_node
+                    for resource_name, resource_value in self._resources.items():
+                        bundles[i][resource_name] = self._num_resources_per_node
 
             pg = placement_group(bundles, strategy="PACK")
             ray.get(pg.ready())
