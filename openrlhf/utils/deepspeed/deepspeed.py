@@ -204,6 +204,30 @@ class DeepspeedStrategy(ABC):
             return grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
         return 0.0
 
+    def get_global_steps(self, model: nn.Module) -> Optional[int]:
+        """DeepSpeed engine's real-optimizer-update counter. NOTE: increments at every
+        gradient-accumulation boundary regardless of whether the update was actually applied
+        (e.g. it still increments when an FP16 overflow causes the step to be skipped) --
+        prefer `was_step_applied()` where available. Returns None if unavailable (e.g.
+        non-DeepSpeed model), so callers must provide a fallback.
+        """
+        if isinstance(model, Actor):
+            model = model.model
+        return getattr(model, "global_steps", None)
+
+    def was_step_applied(self, model: nn.Module) -> Optional[bool]:
+        """Whether the most recent `model.step()` call actually applied a parameter update, per
+        DeepSpeed's own `was_step_applied()` (True only on a real update; False both between
+        accumulation boundaries and when an FP16 overflow skips the update at a boundary).
+        Returns None if unavailable (e.g. non-DeepSpeed model), so callers must provide a
+        fallback.
+        """
+        if isinstance(model, Actor):
+            model = model.model
+        if hasattr(model, "was_step_applied"):
+            return bool(model.was_step_applied())
+        return None
+
     def setup_dataloader(
         self,
         replay_buffer,

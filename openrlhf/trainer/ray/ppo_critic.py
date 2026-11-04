@@ -110,12 +110,30 @@ class CriticPPOTrainer(ABC):
                 pbar.set_postfix(status)
 
         if status_list:
-            status_mean = status_list[0]
-            for m in status_list[1:]:
-                for k, v in m.items():
-                    status_mean[k] += v
-            for k in status_mean.keys():
-                status_mean[k] /= len(status_list)
+            # `critic_lr` and `critic_grad_norm` are stateful, optimizer-boundary telemetry (the
+            # scheduler's current LR and the most recent real gradient-norm reading) rather than
+            # per-microbatch data statistics. Naively averaging them across every microbatch --
+            # including gradient-accumulation-only microbatches where the optimizer never
+            # stepped -- silently corrupts the reported LR/grad-norm (e.g. `critic_lr` would
+            # drift away from `critic_scheduler.get_last_lr()[0]` whenever the LR changes
+            # mid-`ppo_train()`, and `critic_grad_norm` would be diluted by stale repeats).
+            # They use last-value semantics instead, mirroring `actor_lr` / `actor_grad_norm` in
+            # ActorPPOTrainer.ppo_train(). `critic_grad_norm` is only present on status entries
+            # that actually closed an optimizer step (see training_step()), so "last" here means
+            # the last status entry that has the key, not necessarily the last entry overall.
+            last_value_keys = ("critic_lr", "critic_grad_norm")
+            all_keys = set().union(*(status.keys() for status in status_list))
+            status_mean = {}
+            for k in all_keys:
+                # `critic_loss`/`values` are always set unconditionally in every status dict
+                # today, so this is equivalent to the plain mean for them; keying off presence
+                # (rather than assuming every key exists in every dict) just avoids a KeyError
+                # if an optional per-microbatch metric is ever added without also adding it to
+                # `last_value_keys` above.
+                vals = [status[k] for status in status_list if k in status]
+                if not vals:
+                    continue
+                status_mean[k] = vals[-1] if k in last_value_keys else sum(vals) / len(vals)
         return status_mean
 
     def training_step(
@@ -167,19 +185,51 @@ class CriticPPOTrainer(ABC):
         loss = critic_loss + aux_loss
 
         self.strategy.backward(loss, self.critic, self.critic_optim)
+        # DeepSpeed's engine.step() must be invoked every microbatch under static GAS>1 so it
+        # can internally track accumulation, but it only actually updates weights (and the
+        # scheduler/grad-norm) at the boundary -- and even then, an FP16 dynamic-loss-scale
+        # overflow can make the engine skip the parameter update on what is otherwise a real
+        # boundary. `was_step_applied()` is DeepSpeed's own authoritative, overflow-aware
+        # answer to "did the latest step() change model parameters?" (confirmed against
+        # DeepSpeed 0.19.5 source: `global_steps` increments unconditionally at every boundary
+        # even when overflow skips the update, so a global_steps comparison alone is NOT
+        # sufficient here). We fall back to a global_steps before/after comparison for
+        # DeepSpeed versions/wrappers without `was_step_applied()`, and finally to `False`
+        # (do not claim an unproven update) if neither signal is exposed.
+        global_steps_before = self.strategy.get_global_steps(self.critic)
+
+        def _detect_real_update():
+            was_applied = self.strategy.was_step_applied(self.critic)
+            if was_applied is not None:
+                return was_applied
+            if global_steps_before is not None:
+                return self.strategy.get_global_steps(self.critic) > global_steps_before
+            return False
+
         if self.args.train.dynamic_batch_enable:
             if self.replay_buffer.dynamic_optimizer_step[step]:
                 self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+                is_optimizer_step = _detect_real_update()
+            else:
+                is_optimizer_step = False
         else:
             self.strategy.optimizer_step(self.critic_optim, self.critic, self.critic_scheduler, name="critic")
+            is_optimizer_step = _detect_real_update()
 
         # status
         status = {
             "critic_loss": critic_loss.detach().item(),
             "values": masked_mean(values, experience.action_mask).detach().item(),
             "critic_lr": self.critic_scheduler.get_last_lr()[0],
-            "critic_grad_norm": self.strategy.get_grad_norm(self.critic),
         }
+        # `critic_grad_norm` reflects DeepSpeed's most recently computed optimizer-boundary
+        # gradient norm (DeepspeedStrategy.get_grad_norm() -> engine.get_global_grad_norm()).
+        # On a microbatch that only accumulates gradients (no real update this call), that
+        # engine value is simply stale from the previous boundary, so we must not report it
+        # here -- gated on `is_optimizer_step` above rather than assuming every static-batching
+        # microbatch is a boundary.
+        if is_optimizer_step:
+            status["critic_grad_norm"] = self.strategy.get_grad_norm(self.critic)
         return status
 
 
