@@ -155,3 +155,69 @@ def test_save_model_genuine_mismatch_still_raises(ds_module):
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(AssertionError, match="q_proj.weight"):
             strategy.save_model(model, _tokenizer(), tmp)
+
+
+@pytest.mark.parametrize("family", ["llama", "qwen2"])
+@pytest.mark.parametrize("role", ["reward", "critic"])
+@pytest.mark.parametrize("statistics", [None, (0.25, 1.75)])
+@pytest.mark.parametrize("param_dtype", ["bf16", "fp16"])
+def test_normalization_buffers_roundtrip(ds_module, tmp_path, family, role, statistics, param_dtype):
+    import torch
+    from transformers import AutoModel, LlamaConfig, Qwen2Config
+
+    from openrlhf.models import get_llm_for_sequence_regression
+    from openrlhf.models.model import _get_critic_model, _get_reward_model
+
+    config_cls = LlamaConfig if family == "llama" else Qwen2Config
+    config = config_cls(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        pad_token_id=0,
+    )
+    config.normalize_reward = True
+    config._attn_implementation = "eager"
+    if statistics is not None:
+        config.mean, config.std = statistics
+    mean, std = statistics or (0.0, 1.0)
+    base_class = AutoModel._model_mapping[type(config)]
+    factory = _get_reward_model if role == "reward" else _get_critic_model
+    model_cls = factory(base_class.__base__, base_class)
+    torch.manual_seed(17)
+    dtype = torch.bfloat16 if param_dtype == "bf16" else torch.float16
+    model = model_cls(config).to(dtype).eval()
+    assert model.mean.item() == mean and model.std.item() == std
+    assert "mean" not in model.state_dict() and "std" not in model.state_dict()
+    input_ids = torch.tensor([[0, 0, 2, 3], [2, 3, 4, 5]])
+    kwargs = {"attention_mask": input_ids.ne(0)}
+    if role == "critic":
+        kwargs["action_mask"] = torch.tensor([[1, 0], [1, 1]])
+    model.normalize_reward = False
+    with torch.no_grad():
+        raw = model(input_ids, **kwargs)
+    model.save_pretrained(tmp_path)
+
+    for normalize in (False, True):
+        restored = get_llm_for_sequence_regression(
+            str(tmp_path), role, normalize_reward=normalize, param_dtype=param_dtype, attn_implementation="eager"
+        ).eval()
+        assert restored.mean.item() == mean and restored.std.item() == std
+        # Loading buffers must not reinitialize any checkpoint weights.
+        for name, value in model.state_dict().items():
+            torch.testing.assert_close(restored.state_dict()[name], value, rtol=0, atol=0)
+        with torch.no_grad():
+            actual = restored(input_ids, **kwargs)
+        expected = raw
+        if normalize:
+            expected = (raw - mean) / std
+            if role == "critic":
+                expected = expected * kwargs["action_mask"]
+        torch.testing.assert_close(actual, expected, rtol=0.01, atol=0.001)
+        assert torch.isfinite(actual).all()
+        if role == "reward":
+            restored.train()
+            with torch.no_grad():
+                torch.testing.assert_close(restored(input_ids, **kwargs), raw, rtol=0, atol=0)
