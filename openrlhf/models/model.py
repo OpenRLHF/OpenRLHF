@@ -207,7 +207,6 @@ def _get_reward_model(base_pretrained_model, base_llm_model, value_head_prefix="
             attention_mask: Optional[torch.Tensor] = None,
             return_output=False,
             ring_attn_group=None,
-            pad_sequence=False,
             packed_seq_lens=None,
         ) -> torch.Tensor:
             batch, seqlen = input_ids.size()
