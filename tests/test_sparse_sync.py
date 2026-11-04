@@ -1,6 +1,4 @@
-"""Round-trip tests for the sparse weight sync codec.
-
-"""
+"""Round-trip tests for the sparse weight sync codec."""
 
 import pytest
 import torch
@@ -89,7 +87,7 @@ def test_sparse_load_context_partial_copy():
 
 
 def test_sparse_load_context_sharded_loader():
-    """ Unchanged (NaN) positions must survive."""
+    """Unchanged (NaN) positions must survive."""
     fused = torch.arange(64, dtype=torch.float32).reshape(8, 8).to(torch.bfloat16)
     orig = fused.clone()
     update = torch.full((4, 8), float("nan"), dtype=torch.bfloat16)

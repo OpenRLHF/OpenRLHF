@@ -50,8 +50,7 @@ class WorkerWrap:
         del weight
 
     def update_weight_sparse(self, name, dtype, shape, nnz, empty_cache=False):
-        """Receive only the elements changed since the last sync and scatter them in.
-        """
+        """Receive only the elements changed since the last sync and scatter them in."""
         import math
 
         import torch

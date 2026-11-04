@@ -1,5 +1,4 @@
-"""Implementation of SparseRL-Sync, arXiv 2605.07330
-"""
+"""Implementation of SparseRL-Sync, arXiv 2605.07330"""
 
 from contextlib import contextmanager
 
@@ -29,7 +28,7 @@ def apply_diff(dst: torch.Tensor, indices: torch.Tensor, values: torch.Tensor) -
 
 @contextmanager
 def sparse_load_context():
-    """Patch Tensor.copy_ so load_weights only overwrites non-NaN elements. 
+    """Patch Tensor.copy_ so load_weights only overwrites non-NaN elements.
     This is a hack, will need vllm support for delta sync to get rid of this
     """
     orig_copy_ = torch.Tensor.copy_
