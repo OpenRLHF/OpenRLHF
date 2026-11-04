@@ -713,6 +713,11 @@ python3 -m openrlhf.cli.train_ppo_ray \
 
 ### LoRA: Merging Adapters
 
+Reward-model LoRA now trains and saves the complete value head. Training checkpoints
+created with the previous head layout cannot resume directly with this layout;
+finish those runs with the OpenRLHF version that created them. Older adapter exports
+that omitted a newly initialized value head cannot reconstruct the missing weights.
+
 When using LoRA/QLoRA, OpenRLHF saves only the adapter weights. To deploy or continue training, merge the adapter with the base model:
 
 ```bash

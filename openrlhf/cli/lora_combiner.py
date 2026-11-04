@@ -1,7 +1,7 @@
 import argparse
 
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from openrlhf.utils.config import hierarchize
 from openrlhf.utils.utils import convert_to_torch_dtype
@@ -9,10 +9,23 @@ from openrlhf.utils.utils import convert_to_torch_dtype
 
 def apply_lora(model_name_or_path, lora_path, output_path, is_rm, param_dtype):
     print(f"Loading the base model from {model_name_or_path}")
-    model_cls = AutoModelForCausalLM if not is_rm else AutoModelForSequenceClassification
     torch_dtype = convert_to_torch_dtype(param_dtype)
-    base = model_cls.from_pretrained(model_name_or_path, torch_dtype=torch_dtype, low_cpu_mem_usage=True)
-    base_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+    if is_rm:
+        from openrlhf.models import get_llm_for_sequence_regression
+
+        # Restore the scalar head and reward metadata used during training.
+        base = get_llm_for_sequence_regression(
+            model_name_or_path,
+            "reward",
+            config=AutoConfig.from_pretrained(lora_path, trust_remote_code=True),
+            param_dtype=param_dtype,
+            attn_implementation="eager",
+        )
+    else:
+        base = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path, torch_dtype=torch_dtype, low_cpu_mem_usage=True
+        )
+    base_tokenizer = AutoTokenizer.from_pretrained(lora_path if is_rm else model_name_or_path)
 
     print(f"Loading the LoRA adapter from {lora_path}")
     # apply lora to transformer
@@ -23,7 +36,7 @@ def apply_lora(model_name_or_path, lora_path, output_path, is_rm, param_dtype):
     )
 
     print("Applying and merging the LoRA weights")
-    lora_model.merge_and_unload()
+    base = lora_model.merge_and_unload()
 
     print(f"Saving the complete model to {output_path}")
     base.save_pretrained(output_path)
@@ -39,7 +52,7 @@ if __name__ == "__main__":
         "--is_rm",
         action="store_true",
         default=False,
-        help="Whether to treat the model as a reward model (AutoModelForSequenceClassification)",
+        help="Whether to merge an OpenRLHF reward model with a scalar value head",
     )
     parser.add_argument(
         "--ds.param_dtype",

@@ -6,9 +6,7 @@ import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, BitsAndBytesConfig
-from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
-from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
 from .utils import compute_entropy, log_probs_from_logits, set_z3_leaf_modules
 
 
@@ -102,6 +100,8 @@ class Actor(nn.Module):
             # Note: dschf is defined in function scope to avoid global effects
             # https://huggingface.co/docs/transformers/deepspeed#non-trainer-deepspeed-integration
             if ds_config is not None and ds_config["zero_optimization"]["stage"] == 3:
+                from transformers.integrations.deepspeed import HfDeepSpeedConfig
+
                 _patch_zero3_weight_mapping()
                 dschf = HfDeepSpeedConfig(ds_config)
             else:
@@ -234,6 +234,8 @@ class Actor(nn.Module):
         """Returns action log probs"""
         batch, seqlen = sequences.size()
         if self.packing_samples:
+            from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
+
             sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
                 sequences, attention_mask, ring_attn_group
             )

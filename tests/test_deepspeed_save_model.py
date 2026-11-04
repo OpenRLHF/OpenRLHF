@@ -155,3 +155,232 @@ def test_save_model_genuine_mismatch_still_raises(ds_module):
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(AssertionError, match="q_proj.weight"):
             strategy.save_model(model, _tokenizer(), tmp)
+
+
+@pytest.fixture(params=["llama", "qwen2"])
+def tiny_lm(request, tmp_path):
+    import torch
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast, Qwen2Config, Qwen2ForCausalLM
+
+    config_cls, model_cls = (
+        (LlamaConfig, LlamaForCausalLM) if request.param == "llama" else (Qwen2Config, Qwen2ForCausalLM)
+    )
+    torch.manual_seed(17)
+    config = config_cls(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        pad_token_id=0,
+    )
+    base_path = tmp_path / "base"
+    model_cls(config).save_pretrained(base_path)
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[PAD]": 0, "[UNK]": 1, "yes": 2, "no": 3}, unk_token="[UNK]")),
+        pad_token="[PAD]",
+        unk_token="[UNK]",
+    )
+    tokenizer.save_pretrained(base_path)
+    return base_path, tokenizer
+
+
+@pytest.mark.parametrize(
+    "targets,head_name,stage",
+    [
+        ("all-linear", "score", 2),
+        (["q_proj", "v_proj"], "value_head", 2),
+        ("all-linear", "value_head", 3),
+        (["q_proj", "v_proj"], "score", 3),
+    ],
+)
+@pytest.mark.parametrize("param_dtype", ["bf16", "fp16"])
+def test_reward_lora_checkpoint_roundtrip(ds_module, tiny_lm, tmp_path, targets, head_name, stage, param_dtype):
+    import torch
+    from transformers import AutoConfig
+
+    from openrlhf.cli.lora_combiner import apply_lora
+    from openrlhf.models import get_llm_for_sequence_regression
+
+    base_path, tokenizer = tiny_lm
+    model = get_llm_for_sequence_regression(
+        str(base_path),
+        "reward",
+        lora_rank=2,
+        param_dtype=param_dtype,
+        target_modules=targets,
+        value_head_prefix=head_name,
+        init_value_head=True,
+        attn_implementation="eager",
+    )
+    head = getattr(model.base_model.model, head_name)
+    assert head.weight.requires_grad
+    initial_head = head.weight.detach().clone()
+    input_ids = torch.tensor([[0, 0, 2, 3], [2, 3, 4, 5]])
+    mask = input_ids.ne(0)
+    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=0.01)
+    model.train()
+    for _ in range(2):
+        rewards = model(input_ids, attention_mask=mask)
+        loss = -torch.nn.functional.logsigmoid(rewards[0] - rewards[1])
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    model.eval()
+    assert not torch.equal(initial_head, head.weight)
+    # The trainer stores normalization statistics in config, not persistent buffers.
+    model.config.mean, model.config.std = 0.25, 1.75
+    expected = model(input_ids, attention_mask=mask).detach()
+    adapter_path, merged_path = tmp_path / "adapter", tmp_path / "merged"
+    strategy = _strategy(ds_module, zero_stage=stage)
+    if stage == 3:
+        # Exercise the real consolidated-state dispatch without a GPU ZeRO engine.
+        model._consolidated_16bit_state_dict = lambda: model.state_dict()
+    strategy.save_model(model, tokenizer, str(adapter_path))
+    assert AutoConfig.from_pretrained(adapter_path).value_head_prefix == head_name
+    restored = get_llm_for_sequence_regression(
+        str(base_path),
+        "reward",
+        config=AutoConfig.from_pretrained(adapter_path),
+        param_dtype=param_dtype,
+        attn_implementation="eager",
+    )
+    restored = peft.PeftModel.from_pretrained(restored, str(adapter_path)).eval()
+    restored_head = getattr(restored.base_model.model, head_name)
+    torch.testing.assert_close(restored_head.weight, head.weight, rtol=0, atol=0)
+    torch.testing.assert_close(restored(input_ids, attention_mask=mask), expected, rtol=0.02, atol=0.01)
+
+    apply_lora(str(base_path), str(adapter_path), str(merged_path), True, param_dtype)
+    merged = get_llm_for_sequence_regression(
+        str(merged_path), "reward", param_dtype=param_dtype, attn_implementation="eager"
+    ).eval()
+    assert getattr(merged, head_name).out_features == 1
+    torch.testing.assert_close(getattr(merged, head_name).weight, head.weight, rtol=0, atol=0)
+    assert merged.config.mean == 0.25 and merged.config.std == 1.75
+    torch.testing.assert_close(merged(input_ids, attention_mask=mask), expected, rtol=0.03, atol=0.01)
+
+
+def test_causal_lm_lora_merge_control(ds_module, tiny_lm, tmp_path):
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    from openrlhf.cli.lora_combiner import apply_lora
+
+    base_path, tokenizer = tiny_lm
+    model = AutoModelForCausalLM.from_pretrained(base_path, torch_dtype=torch.bfloat16)
+    model = peft.get_peft_model(model, peft.LoraConfig(r=2, target_modules=["q_proj", "v_proj"]))
+    # Nonzero adapters ensure the test checks actual merging.
+    with torch.no_grad():
+        for name, parameter in model.named_parameters():
+            if "lora_B" in name:
+                parameter.fill_(0.1)
+    model.eval()
+    input_ids = torch.tensor([[2, 3, 4]])
+    expected = model(input_ids).logits.detach()
+    adapter_path, merged_path = tmp_path / "adapter", tmp_path / "merged"
+    _strategy(ds_module, zero_stage=2).save_model(model, tokenizer, str(adapter_path))
+    apply_lora(str(base_path), str(adapter_path), str(merged_path), False, "bf16")
+    merged = AutoModelForCausalLM.from_pretrained(merged_path, torch_dtype=torch.bfloat16).eval()
+    torch.testing.assert_close(merged(input_ids).logits, expected, rtol=0.03, atol=0.003)
+
+
+def test_reward_lora_combiner_loads_scalar_head(ds_module, tiny_lm, tmp_path):
+    import torch
+
+    from openrlhf.cli.lora_combiner import apply_lora
+    from openrlhf.models import get_llm_for_sequence_regression
+
+    base_path, tokenizer = tiny_lm
+    model = get_llm_for_sequence_regression(str(base_path), "reward", attn_implementation="eager")
+    # Build a complete adapter independently of the reward-training LoRA configuration.
+    model = peft.get_peft_model(
+        model, peft.LoraConfig(r=2, target_modules=["q_proj", "v_proj"], modules_to_save=["score"])
+    ).eval()
+    adapter_path, merged_path = tmp_path / "adapter", tmp_path / "merged"
+    _strategy(ds_module, zero_stage=2).save_model(model, tokenizer, str(adapter_path))
+    apply_lora(str(base_path), str(adapter_path), str(merged_path), True, "bf16")
+    merged = get_llm_for_sequence_regression(str(merged_path), "reward", attn_implementation="eager").eval()
+    torch.testing.assert_close(merged.score.weight, model.base_model.model.score.weight, rtol=0, atol=0)
+
+
+def test_reward_without_lora_and_critic_lora_control(ds_module, tiny_lm, tmp_path):
+    import torch
+
+    from openrlhf.models import get_llm_for_sequence_regression
+
+    base_path, tokenizer = tiny_lm
+    model = get_llm_for_sequence_regression(str(base_path), "reward", attn_implementation="eager")
+    assert isinstance(model.score, nn.Linear) and model.score.weight.requires_grad
+    output_path = tmp_path / "full"
+    _strategy(ds_module, zero_stage=2).save_model(model, tokenizer, str(output_path))
+    restored = get_llm_for_sequence_regression(str(output_path), "reward", attn_implementation="eager")
+    torch.testing.assert_close(restored.score.weight, model.score.weight, rtol=0, atol=0)
+    critic = get_llm_for_sequence_regression(
+        str(base_path), "critic", lora_rank=2, target_modules=["q_proj", "v_proj"], attn_implementation="eager"
+    )
+    assert critic.peft_config["default"].modules_to_save is None
+    assert isinstance(critic.base_model.model.score, nn.Linear)
+
+
+def test_reward_merge_without_training_dependencies(tiny_lm, tmp_path):
+    import subprocess
+    from pathlib import Path
+
+    base_path, _ = tiny_lm
+    script = r"""
+import importlib.abc
+import sys
+from pathlib import Path
+
+class NoTrainingImports(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".")[0] in {"flash_attn", "ring_flash_attn", "deepspeed"}:
+            return importlib.util.spec_from_loader(fullname, self)
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        raise AssertionError(f"Unneeded training import: {module.__name__}")
+
+# Report packages as absent to optional-dependency probes, and fail any actual import.
+find_spec = importlib.util.find_spec
+importlib.util.find_spec = lambda name, *args, **kwargs: (
+    None if name.split(".")[0] in {"flash_attn", "ring_flash_attn", "deepspeed"}
+    else find_spec(name, *args, **kwargs)
+)
+sys.meta_path.insert(0, NoTrainingImports())
+import torch
+from transformers import AutoTokenizer
+from openrlhf.cli.lora_combiner import apply_lora
+from openrlhf.models import get_llm_for_sequence_regression
+
+base, output = sys.argv[1:]
+model = get_llm_for_sequence_regression(
+    base, "reward", lora_rank=2, target_modules="all-linear", attn_implementation="eager"
+).eval()
+with torch.no_grad():
+    model.base_model.model.score.weight.fill_(0.1)
+ids = torch.tensor([[2, 3, 4]])
+expected = model(ids, attention_mask=torch.ones_like(ids)).detach()
+adapter, merged_path = Path(output) / "adapter", Path(output) / "merged"
+model.save_pretrained(adapter)
+model.config.to_json_file(adapter / "config.json")
+AutoTokenizer.from_pretrained(base).save_pretrained(adapter)
+apply_lora(base, str(adapter), str(merged_path), True, "bf16")
+merged = get_llm_for_sequence_regression(str(merged_path), "reward", attn_implementation="eager").eval()
+torch.testing.assert_close(merged.score.weight, model.base_model.model.score.weight, atol=0, rtol=0)
+torch.testing.assert_close(merged(ids, attention_mask=torch.ones_like(ids)), expected, atol=0.01, rtol=0.03)
+assert not any(name.split(".")[0] in {"flash_attn", "ring_flash_attn", "deepspeed"} for name in sys.modules)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(base_path), str(tmp_path)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
