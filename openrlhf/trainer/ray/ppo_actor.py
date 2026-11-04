@@ -98,6 +98,10 @@ class ActorPPOTrainer(ABC):
 
         # Init torch group for weights sync
         backend = getattr(self.strategy.args.vllm, "sync_backend", "nccl")
+        self.use_delta_sync = backend == "nccl_delta"
+        if self.use_delta_sync:
+            backend = "nccl"
+            self._delta_snapshots = {}
         self.use_cuda_ipc = backend == "nccl" and self.args.train.colocate_all and not self.args.train.async_enable
 
         if self.vllm_engines is not None and not self.use_cuda_ipc and torch.distributed.get_rank() == 0:
@@ -417,6 +421,7 @@ class ActorPPOTrainer(ABC):
         torch.cuda.empty_cache()
         model = self.actor.model.module
         count = 0
+        delta_stats = {"wire_bytes": 0, "full_bytes": 0, "changed": 0, "numel": 0}
 
         def _broadcast_param(param, count, num_params):
             use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
@@ -435,6 +440,56 @@ class ActorPPOTrainer(ABC):
                 else:
                     self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
                 ray.get(refs)
+
+        def _broadcast_param_delta(param, count, num_params):
+            from openrlhf.utils.sparse_sync import diff_tensor
+
+            if torch.distributed.get_rank() != 0:
+                return
+            data = param.data
+            delta_stats["full_bytes"] += data.nbytes
+            delta_stats["numel"] += data.numel()
+            snap = self._delta_snapshots.get(name)
+            if snap is None:
+                _broadcast_param(param, count, num_params)
+                self._delta_snapshots[name] = torch.empty_like(data, device="cpu", pin_memory=True).copy_(data)
+                delta_stats["wire_bytes"] += data.nbytes
+                delta_stats["changed"] += data.numel()
+                return
+
+            indices, values = diff_tensor(data, snap.to(data.device, non_blocking=True))
+            delta_stats["changed"] += indices.numel()
+            if indices.nbytes + values.nbytes >= data.nbytes:
+                _broadcast_param(param, count, num_params)
+                snap.copy_(data)
+                delta_stats["wire_bytes"] += data.nbytes
+                return
+
+            use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
+            shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
+            refs = [
+                engine.update_weight_sparse.remote(
+                    name,
+                    dtype=param.dtype,
+                    shape=shape,
+                    nnz=indices.numel(),
+                    empty_cache=count == num_params,
+                )
+                for engine in self.vllm_engines
+            ]
+            if indices.numel() > 0:
+                if use_ray:
+                    import ray.util.collective as collective
+
+                    collective.broadcast(indices, 0, group_name=self._model_update_group)
+                    collective.broadcast(values, 0, group_name=self._model_update_group)
+                else:
+                    stream = torch.cuda.current_stream()
+                    self._model_update_group.broadcast(indices, src=0, stream=stream)
+                    self._model_update_group.broadcast(values, src=0, stream=stream)
+                snap.copy_(data)
+                delta_stats["wire_bytes"] += indices.nbytes + values.nbytes
+            ray.get(refs)
 
         def _handle_cuda_ipc(param, count, num_params):
             from torch.multiprocessing.reductions import reduce_tensor
@@ -471,7 +526,12 @@ class ActorPPOTrainer(ABC):
                 return deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True)
             return deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.ds.zero_stage == 3)
 
-        sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
+        if self.use_cuda_ipc:
+            sync_fn = _handle_cuda_ipc
+        elif self.use_delta_sync:
+            sync_fn = _broadcast_param_delta
+        else:
+            sync_fn = _broadcast_param
 
         # VLM: only sync trainable (language model) params — vision encoder is frozen.
         params_to_sync = [
@@ -501,7 +561,7 @@ class PolicyModelActor(BaseModelActor):
 
         # Skip for vLLM >= 0.16 where NCCL_CUMEM_ENABLE=0 causes ncclCommInitRank to fail
         # with "unhandled cuda error" under NCCL 2.27+.
-        if getattr(args.vllm, "sync_backend", "nccl") == "nccl":
+        if getattr(args.vllm, "sync_backend", "nccl") in ("nccl", "nccl_delta"):
             import vllm
             from packaging import version as pkg_version
 

@@ -118,6 +118,12 @@ class RolloutRayActor:
             args=(name, dtype, shape, empty_cache),
         )
 
+    async def update_weight_sparse(self, name, dtype, shape, nnz, empty_cache=False):
+        return await self.llm.collective_rpc(
+            "update_weight_sparse",
+            args=(name, dtype, shape, nnz, empty_cache),
+        )
+
     async def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
         return await self.llm.collective_rpc(
             "update_weight_cuda_ipc",
