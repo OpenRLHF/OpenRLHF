@@ -391,11 +391,14 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     else:
         is_correct = False
         for gt_elem, given_elem in zip(ground_truth_elems, given_elems, strict=False):
-            if _is_frac(gt_elem) and _is_frac(given_elem):
-                is_correct = gt_elem == given_elem
-            elif _str_is_int(gt_elem) != _str_is_int(given_elem):
-                is_correct = False
+            if _is_frac(gt_elem) and _is_frac(given_elem) and gt_elem == given_elem:
+                is_correct = True
             else:
+                # Equal strings are not the only way two answers can match:
+                # ``2/4`` and ``1/2`` are the same number, and ``sqrt(4)`` or
+                # ``8/2`` equal the integer ``2``. Rejecting on representation
+                # alone marks mathematically equal answers wrong, so let the
+                # symbolic check decide instead of short-circuiting to False.
                 is_correct = are_equal_under_sympy(gt_elem, given_elem)
             if not is_correct:
                 break
