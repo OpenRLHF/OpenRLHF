@@ -149,7 +149,19 @@ class SFTDataset(Dataset):
                 return_tensors="pt",
                 add_special_tokens=False,
             )
-            prompt_ids_len = prompt_token["attention_mask"].int().sum().item()
+            prompt_ids = prompt_token["input_ids"][0].tolist()
+            text_ids = self.tokenizer(
+                prompt + response,
+                max_length=self.max_length,
+                padding=False,
+                truncation=True,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )["input_ids"][0].tolist()
+            prompt_ids_len = next(
+                (i for i, (prompt_id, text_id) in enumerate(zip(prompt_ids, text_ids)) if prompt_id != text_id),
+                min(len(prompt_ids), len(text_ids)),
+            )
             # filter the sample whose length is greater than max_length (2 for answer length)
             if not prompt or not response or prompt_ids_len >= self.max_length - 2:
                 prompt = None
