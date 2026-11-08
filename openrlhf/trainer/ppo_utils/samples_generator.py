@@ -57,6 +57,10 @@ class SamplesGenerator:
         self.prompts_dataloader = prompts_dataloader
         self.eval_dataloader = eval_dataloader
 
+        # Resume point of generate_samples(); persisted by state_dict().
+        self._dataloader_iter = None
+        self._sample_buffer: List[Experience] = []
+
     @torch.no_grad()
     def generate_eval_samples(self, **generate_kwargs) -> List[Experience]:
         """Generate evaluation samples for the entire eval dataloader."""
@@ -93,9 +97,9 @@ class SamplesGenerator:
         may produce more samples than one training step needs.  Extras are kept
         in ``_sample_buffer`` and served in subsequent calls without hitting vLLM.
         """
-        if getattr(self, "_dataloader_iter", None) is None and not getattr(self, "_sample_buffer", None):
+        if self._dataloader_iter is None and not self._sample_buffer:
             self._dataloader_iter = iter(self.prompts_dataloader)
-            self._sample_buffer: List[Experience] = []
+            self._sample_buffer = []
 
         chunk_size = self.args.rollout.batch_size * self.args.rollout.n_samples_per_prompt
         prompts_consumed = 0
@@ -136,6 +140,26 @@ class SamplesGenerator:
         exhausted = self._dataloader_iter is None and len(self._sample_buffer) == 0
 
         return rollout_samples, filter_pass_rate, prompts_consumed, exhausted
+
+    def state_dict(self) -> dict:
+        """Snapshot the resume point of ``generate_samples`` for async checkpoints.
+
+        The dataloader cursor alone cannot reproduce the stream: oversampling
+        (``vllm_generate_batch_size > batch_size``) leaves rollouts in
+        ``_sample_buffer`` that the loader has already advanced past (#1322).
+        """
+        return {
+            "data_loader_state_dict": self.prompts_dataloader.state_dict(),
+            "sample_buffer": list(self._sample_buffer),
+            "dataloader_exhausted": self._dataloader_iter is None,
+        }
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        self.prompts_dataloader.load_state_dict(state_dict["data_loader_state_dict"])
+        self._sample_buffer = list(state_dict.get("sample_buffer") or [])
+        # Restoring the exhausted bit keeps a drained episode terminal; re-iterating a
+        # finished loader can replay prompts that were already trained.
+        self._dataloader_iter = None if state_dict.get("dataloader_exhausted") else iter(self.prompts_dataloader)
 
     def _generate_vllm(
         self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs

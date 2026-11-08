@@ -436,7 +436,11 @@ class BasePPOTrainer(ABC):
             checkpoint_states = ray.get(self.actor_model_group.async_run_method(method_name="get_checkpoint_states"))[
                 0
             ]
-            logger.info(f"checkpoint_states: {checkpoint_states}")
+            # Buffered rollouts hold full token tensors; log the resumable scalars only.
+            resumable = {
+                key: value for key, value in checkpoint_states.items() if key != "samples_generator_state_dict"
+            }
+            logger.info(f"checkpoint_states: {resumable}")
             return checkpoint_states
         return {
             "episode": 0,

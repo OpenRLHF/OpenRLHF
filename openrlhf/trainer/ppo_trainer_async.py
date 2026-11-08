@@ -74,7 +74,7 @@ class GenerateSamplesActor:
         return self.max_steps
 
     def load_state_dict(self, state_dict):
-        self.prompts_dataloader.load_state_dict(state_dict)
+        self.samples_generator.load_state_dict(state_dict)
 
     def _should_eval(self, global_step):
         return (
@@ -144,7 +144,9 @@ class GenerateSamplesActor:
                     client_states = {
                         "episode": episode,
                         "total_consumed_prompts": total_consumed_prompts,
-                        "data_loader_state_dict": self.prompts_dataloader.state_dict(),
+                        # Carried per rollout so the checkpoint matches this training boundary,
+                        # even when generation has already run ahead of training (#1322).
+                        "samples_generator_state_dict": self.samples_generator.state_dict(),
                     }
                     self.rollout_queue.put(
                         (rollout_samples, client_states, filter_pass_rate, generation_time), block=True
@@ -334,9 +336,13 @@ class PPOTrainerAsync:
         total_consumed_prompts = checkpoint_states.get("total_consumed_prompts", 0)
         # Keep vLLM weights and dataloader states in sync when resuming.
         if global_step > 0:
+            generator_state = checkpoint_states.get("samples_generator_state_dict") or {
+                # Checkpoints saved before #1322 only carry the dataloader cursor.
+                "data_loader_state_dict": checkpoint_states["data_loader_state_dict"]
+            }
             ray.get(
                 [
-                    self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
+                    self.generator_actor.load_state_dict.remote(generator_state),
                     self.trainer_actor.broadcast_to_vllm.remote(),
                 ]
             )
