@@ -142,7 +142,7 @@ class GenerateSamplesActor:
                 produced = bool(rollout_samples)
                 if produced:
                     client_states = {
-                        "episode": episode,
+                        "episode": episode + int(is_exhausted),
                         "total_consumed_prompts": total_consumed_prompts,
                         # Carried per rollout so the checkpoint matches this training boundary,
                         # even when generation has already run ahead of training (#1322).

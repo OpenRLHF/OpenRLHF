@@ -204,3 +204,88 @@ def test_dynamic_filtering_preserves_terminal_accepted_rollouts(samples_generato
     assert prompts_consumed == 3
     assert exhausted is True
     assert fake_ray.cancelled == []
+
+
+def test_async_checkpoint_advances_episode_after_final_rollout(monkeypatch, samples_generator_module):
+    stateful = pytest.importorskip("torchdata.stateful_dataloader")
+    module, fake_ray = samples_generator_module
+    monkeypatch.setattr(_Pbar, "close", lambda self: None, raising=False)
+    fake_ray.remote = lambda obj=None, **_kw: obj if obj is not None else lambda wrapped: wrapped
+    fake_ray.get = lambda value: value
+    fake_util = types.ModuleType("ray.util")
+    fake_queue = types.ModuleType("ray.util.queue")
+    fake_queue.Queue = object
+    monkeypatch.setitem(sys.modules, "ray.util", fake_util)
+    monkeypatch.setitem(sys.modules, "ray.util.queue", fake_queue)
+    monkeypatch.setitem(sys.modules, "openrlhf.trainer.ppo_trainer", MagicMock())
+    monkeypatch.setitem(sys.modules, "openrlhf.trainer.ray.launcher", MagicMock())
+    monkeypatch.setitem(sys.modules, "openrlhf.utils.deepspeed", MagicMock())
+    monkeypatch.setitem(sys.modules, "openrlhf.utils.utils", MagicMock())
+    monkeypatch.setitem(sys.modules, "openrlhf.trainer.ppo_utils.samples_generator", module)
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("_async_actor_test", root / "openrlhf/trainer/ppo_trainer_async.py")
+    actor_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(actor_module)
+
+    def make_actor(episode_count, count=3):
+        loader = stateful.StatefulDataLoader(list(range(count)), batch_size=None, num_workers=0)
+        actor = actor_module.GenerateSamplesActor.__new__(actor_module.GenerateSamplesActor)
+        actor.args = SimpleNamespace(train=SimpleNamespace(num_episodes=episode_count))
+        actor.prompts_dataloader = loader
+        actor.samples_generator = _generator(module, loader)
+        actor._partial_rollout = True
+        actor._should_eval = lambda _: False
+        actor._eval_just_done = False
+        actor.generate_kwargs = {}
+        actor.rollout_slots = MagicMock()
+        actor.rollout_slots.get.return_value = 0
+        actor.rollout_queue = MagicMock()
+        return actor
+
+    actor = make_actor(2)
+    actor.fit(episode=0, total_consumed_prompts=0)
+    payloads = [call.args[0] for call in actor.rollout_queue.put.call_args_list if call.args[0] != "done"]
+    assert [payload[0] for payload in payloads] == [[0, 1], [2], [0, 1], [2]]
+    first_state, boundary_state, final_state = (payloads[index][1] for index in (0, 1, 3))
+    assert first_state["episode"] == 0
+    assert first_state["samples_generator_state_dict"]["sample_buffer"] == [2]
+    assert boundary_state["episode"] == 1
+    assert final_state["episode"] == 2
+
+    # A producer already ran ahead, but each queued checkpoint belongs to its rollout.
+    replay = make_actor(2)
+    replay.load_state_dict(first_state["samples_generator_state_dict"])
+    replay.fit(first_state["episode"], first_state["total_consumed_prompts"])
+    replay_payloads = [call.args[0] for call in replay.rollout_queue.put.call_args_list if call.args[0] != "done"]
+    assert [payload[0] for payload in replay_payloads] == [[2], [0, 1], [2]]
+
+    replay = make_actor(2)
+    replay.load_state_dict(boundary_state["samples_generator_state_dict"])
+    replay.fit(boundary_state["episode"], boundary_state["total_consumed_prompts"])
+    replay_payloads = [call.args[0] for call in replay.rollout_queue.put.call_args_list if call.args[0] != "done"]
+    assert [payload[0] for payload in replay_payloads] == [[0, 1], [2]]
+
+    replay = make_actor(2)
+    replay.load_state_dict(final_state["samples_generator_state_dict"])
+    replay.fit(final_state["episode"], final_state["total_consumed_prompts"])
+    assert [call.args[0] for call in replay.rollout_queue.put.call_args_list] == ["done"]
+
+    # An exact chunk multiple reports exhaustion on a later empty generation.
+    exact = make_actor(1, count=4)
+    exact.fit(episode=0, total_consumed_prompts=0)
+    exact_payloads = [call.args[0] for call in exact.rollout_queue.put.call_args_list if call.args[0] != "done"]
+    exact_state = exact_payloads[-1][1]
+    replay = make_actor(1, count=4)
+    replay.load_state_dict(exact_state["samples_generator_state_dict"])
+    replay.fit(exact_state["episode"], exact_state["total_consumed_prompts"])
+    assert [call.args[0] for call in replay.rollout_queue.put.call_args_list] == ["done"]
+
+
+def test_legacy_dataloader_only_state_resumes(samples_generator_module):
+    module, _ = samples_generator_module
+    source = _generator(module, _StatefulLoader(range(8)))
+    source.generate_samples()
+    old_state = {"data_loader_state_dict": source.prompts_dataloader.state_dict()}
+    resumed = _generator(module, _StatefulLoader(range(8)))
+    resumed.load_state_dict(old_state)
+    assert resumed.generate_samples()[0] == [4, 5]

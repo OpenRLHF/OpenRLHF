@@ -157,8 +157,7 @@ class SamplesGenerator:
     def load_state_dict(self, state_dict: dict) -> None:
         self.prompts_dataloader.load_state_dict(state_dict["data_loader_state_dict"])
         self._sample_buffer = list(state_dict.get("sample_buffer") or [])
-        # Restoring the exhausted bit keeps a drained episode terminal; re-iterating a
-        # finished loader can replay prompts that were already trained.
+        # Drain any remaining buffered samples before starting another episode.
         self._dataloader_iter = None if state_dict.get("dataloader_exhausted") else iter(self.prompts_dataloader)
 
     def _generate_vllm(
