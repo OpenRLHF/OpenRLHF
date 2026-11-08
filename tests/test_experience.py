@@ -72,3 +72,21 @@ def test_balance_experiences_preserves_divisible_and_ragged_batches(sample_count
     assert all(size > 0 for size in batch_sizes)
     assert sum(batch_sizes) == sample_count
     assert sorted(output_prompts) == sorted(f"sample-{index}" for index in range(sample_count))
+
+
+def test_balance_experiences_preserves_tensor_length_order():
+    args = SimpleNamespace(
+        actor=SimpleNamespace(num_nodes=1, num_gpus_per_node=4),
+        ds=SimpleNamespace(ring_attn_size=1, tensor_parallel_size=1),
+    )
+    lengths = [3, 8, 8, 1, 5, 5, 2, 7]
+    inputs = [_make_experience(index, length) for index, length in enumerate(lengths)]
+
+    outputs = balance_experiences(inputs, args)
+
+    assert [batch.prompts for batch in outputs] == [
+        ["sample-1", "sample-3"],
+        ["sample-2", "sample-6"],
+        ["sample-7", "sample-0"],
+        ["sample-4", "sample-5"],
+    ]
