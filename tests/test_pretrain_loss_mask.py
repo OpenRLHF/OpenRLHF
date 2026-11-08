@@ -10,7 +10,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 from datasets import Dataset
-from tokenizers import Tokenizer, models, pre_tokenizers
+from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
 
@@ -97,6 +97,35 @@ def test_ordinary_sft_and_multiturn_masks_stay_unchanged(modules):
     dataset.multiturn = True
     dataset.response_ranges = [[(2, 2), (4, 4)]]
     assert dataset.get_loss_mask(ids, 0).tolist() == [[0, 1, 0, 1, 0]]
+
+
+def test_sft_mask_includes_boundary_merged_response_token(modules):
+    text = "User: Write Python\nAssistant: def solution(): pass"
+    backend = Tokenizer(models.BPE(unk_token="[UNK]"))
+    backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    backend.train_from_iterator([text], trainers.BpeTrainer(vocab_size=100, special_tokens=["[UNK]", "[EOS]"]))
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend, unk_token="[UNK]", eos_token="[EOS]", pad_token="[EOS]"
+    )
+    strategy = SimpleNamespace(
+        args=SimpleNamespace(
+            data=SimpleNamespace(input_key="question", output_key="response", apply_chat_template=False)
+        )
+    )
+    dataset = modules["datasets.sft_dataset"].SFTDataset(
+        Dataset.from_dict({"question": ["Write Python"], "response": ["def solution(): pass"]}),
+        tokenizer,
+        64,
+        strategy,
+        input_template="User: {}\nAssistant: ",
+        num_processors=1,
+    )
+    _, _, mask = dataset[0]
+    prompt = dataset.prompts[0]
+    encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    response_token = next(i for i, (_, end) in enumerate(encoded["offset_mapping"]) if end > len(prompt))
+    assert tokenizer.convert_ids_to_tokens(encoded["input_ids"])[response_token] == "Ġdef"
+    assert mask[0, response_token - 1] == 1
 
 
 @pytest.mark.parametrize("length", [0, 1])
