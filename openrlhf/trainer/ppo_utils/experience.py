@@ -260,7 +260,7 @@ def balance_experiences(experiences, args):
     items_all = []
     for item in experiences:
         items_all.extend(split_experience_batch(item))
-    items_all.sort(key=lambda x: x.total_length, reverse=True)
+    items_all.sort(key=lambda x: x.total_length.item(), reverse=True)
 
     # split experience into chunks
     effective_num = (
