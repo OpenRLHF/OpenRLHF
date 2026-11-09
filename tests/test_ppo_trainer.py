@@ -118,6 +118,22 @@ def test_sync_fit_does_not_train_empty_exhausted_result(ppo_module):
     assert trainer.samples_generator.calls == 1
 
 
+def test_sync_fit_starts_fresh_when_actor_checkpoint_has_no_latest(ppo_module, tmp_path):
+    # An interrupted first save leaves `_actor` without DeepSpeed's `latest`, so load_ckpt returns {}.
+    (tmp_path / "_actor").mkdir()
+    trainer = _trainer(ppo_module, (["rollout"], None, 1, True))
+    del trainer.init_checkpoint_states
+    trainer.args.ckpt = SimpleNamespace(load_enable=True, path=str(tmp_path))
+    trainer.actor_model_group = MagicMock()
+    trainer.actor_model_group.async_run_method.return_value = [{}]
+    steps = []
+    trainer.train_step = lambda samples, step: (steps.append(step) or ({}, step + 1))
+
+    trainer.fit()
+
+    assert steps == [0]
+
+
 def _checkpoint_trainer(module):
     trainer = module.BasePPOTrainer.__new__(module.BasePPOTrainer)
     trainer.args = SimpleNamespace(logger=SimpleNamespace(logging_steps=1), ckpt=SimpleNamespace(save_steps=1))
