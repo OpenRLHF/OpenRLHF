@@ -437,7 +437,10 @@ class BasePPOTrainer(ABC):
                 0
             ]
             logger.info(f"checkpoint_states: {checkpoint_states}")
-            return checkpoint_states
+            # Empty when `_actor` has no DeepSpeed `latest` (e.g. the first save was interrupted):
+            # start fresh, as #1208 does for SFT/DPO/RM.
+            if checkpoint_states:
+                return checkpoint_states
         return {
             "episode": 0,
             "global_step": 0,
