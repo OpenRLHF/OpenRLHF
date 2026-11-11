@@ -39,7 +39,6 @@ def _grad_wrt_log_probs(log_probs, log_probs_base, **kwargs):
 
 
 def test_flag_off_matches_legacy():
-    # With unbiased_gradient=False the output must equal the legacy clamped estimator, byte-for-byte.
     torch.manual_seed(42)
     log_probs = torch.randn(4, 8)
     log_probs_base = torch.randn(4, 8)
@@ -109,6 +108,23 @@ def test_k1_off_gradient_is_broken_baseline():
     log_probs_base = torch.randn(4, 8)
     g = _grad_wrt_log_probs(log_probs, log_probs_base, kl_estimator="k1", unbiased_gradient=False)
     assert torch.allclose(g, torch.ones_like(g))
+
+
+@pytest.mark.parametrize("corrected", [False, True])
+def test_k3_near_zero_matches_fp64_value_and_gradient(corrected):
+    base = torch.tensor(-0.125)
+    log_probs = (
+        base + torch.tensor([-0.00101, -0.00099, -5e-7, -3e-8, 0.0, 3e-8, 5e-7, 0.00099, 0.00101])
+    ).requires_grad_()
+    log_ratio = log_probs.detach().double() - base.double()
+    expected = (-log_ratio).expm1() + log_ratio
+    expected_grad = log_ratio if corrected else -(-log_ratio).expm1()
+
+    actual = compute_approx_kl(log_probs, base, kl_estimator="k3", unbiased_gradient=corrected)
+    actual.sum().backward()
+
+    torch.testing.assert_close(actual, expected.float(), rtol=2e-4, atol=0)
+    torch.testing.assert_close(log_probs.grad, expected_grad.float(), rtol=2e-4, atol=0)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
