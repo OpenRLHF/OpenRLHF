@@ -156,3 +156,144 @@ def test_multiturn_truncation_reaches_reward_penalty(agent_modules, finish_reaso
         expected_reward = penalty_coef if penalty_coef < 0 else expected_reward * penalty_coef
     assert count == int(expected_truncated)
     assert experience.rewards.item() == expected_reward
+
+
+@pytest.mark.parametrize(
+    ("max_tokens", "max_length", "next_limit", "next_min", "done_after", "expected_limits", "expected_generated"),
+    [
+        (5, 20, None, None, 3, [(5, 0), (2, 0)], 5),
+        (None, 10, None, None, 2, [(8, 0), (4, 0)], 6),
+        (5, 20, 1, None, 2, [(5, 0), (1, 0)], 4),
+        (5, 20, 8, 4, 3, [(5, 0), (2, 2)], 5),
+    ],
+)
+@pytest.mark.parametrize("with_logprobs", [False, True])
+def test_multiturn_respects_generation_budget(
+    agent_modules,
+    max_tokens,
+    max_length,
+    next_limit,
+    next_min,
+    done_after,
+    expected_limits,
+    expected_generated,
+    with_logprobs,
+):
+    agent, _, _ = agent_modules
+    next_params = SimpleNamespace(max_tokens=next_limit, logprobs=1 if with_logprobs else None)
+    if next_min is not None:
+        next_params.min_tokens = next_min
+
+    class Environment(agent.AgentInstanceBase):
+        def __init__(self):
+            self.steps = 0
+
+        async def step(self, states):
+            self.steps += 1
+            result = {"rewards": torch.tensor(1.0), "environment_feedback": " ", "done": self.steps == done_after}
+            if next_limit is not None:
+                result["sampling_params"] = next_params
+            return result
+
+    class Engine:
+        def __init__(self):
+            self.limits = []
+
+        async def generate(self, token_ids, params, **kwargs):
+            self.limits.append((params.max_tokens, getattr(params, "min_tokens", 0)))
+            count = min(params.max_tokens, 3)
+            return SimpleNamespace(
+                outputs=[
+                    SimpleNamespace(
+                        token_ids=[65] * count,
+                        text="A" * count,
+                        finish_reason="stop",
+                        logprobs=[{65: SimpleNamespace(logprob=-0.1)}] * count if with_logprobs else None,
+                    )
+                ]
+            )
+
+    def tokenizer(text, **kwargs):
+        return {"input_ids": torch.tensor([[ord(char) for char in text]])}
+
+    engine = Engine()
+    params = SimpleNamespace(max_tokens=max_tokens, logprobs=1 if with_logprobs else None)
+    response = asyncio.run(
+        agent.MultiTurnAgentExecutor(Environment).execute("xy", "label", params, max_length, tokenizer, engine)
+    )
+
+    assert engine.limits == expected_limits
+    assert sum(end - start for start, end in response["action_ranges"]) == expected_generated
+    assert response["reward"] == 2.0
+    assert response["truncated"] is False
+    assert params.max_tokens == max_tokens
+    assert next_params.max_tokens == next_limit
+    if next_min is not None:
+        assert next_params.min_tokens == next_min
+    if with_logprobs:
+        assert len(response["rollout_log_probs"]) == len(response["observation_tokens"])
+
+
+@pytest.mark.parametrize("use_shared_next_params", [False, True])
+def test_multiturn_concurrent_samples_do_not_share_sampling_state(agent_modules, use_shared_next_params):
+    agent, _, _ = agent_modules
+    shared_next_params = SimpleNamespace(max_tokens=5, logprobs=None)
+
+    class Environment(agent.AgentInstanceBase):
+        def __init__(self):
+            self.steps = 0
+
+        async def step(self, states):
+            self.steps += 1
+            result = {
+                "rewards": torch.tensor(0.0),
+                "environment_feedback": " ",
+                "done": self.steps == 2,
+            }
+            if use_shared_next_params:
+                result["sampling_params"] = shared_next_params
+            return result
+
+    class Engine:
+        def __init__(self):
+            self.limits = {"a": [], "b": []}
+            self.b_started = asyncio.Event()
+            self.a_second_started = asyncio.Event()
+
+        async def generate(self, token_ids, params, **kwargs):
+            name = asyncio.current_task().get_name()
+            limits = self.limits[name]
+            limits.append(params.max_tokens)
+            if len(limits) == 1:
+                if name == "a":
+                    await self.b_started.wait()
+                else:
+                    self.b_started.set()
+                    await self.a_second_started.wait()
+                count = 4 if name == "a" else 1
+            else:
+                if name == "a":
+                    self.a_second_started.set()
+                count = params.max_tokens
+            return SimpleNamespace(
+                outputs=[SimpleNamespace(token_ids=[65] * count, text="A" * count, finish_reason="stop")]
+            )
+
+    def tokenizer(text, **kwargs):
+        return {"input_ids": torch.tensor([[ord(char) for char in text]])}
+
+    async def run():
+        executor = agent.MultiTurnAgentExecutor(Environment)
+        engine = Engine()
+        params = SimpleNamespace(max_tokens=5, logprobs=None)
+        tasks = [
+            asyncio.create_task(executor.execute("xy", "label", params, 20, tokenizer, engine), name=name)
+            for name in ("a", "b")
+        ]
+        responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+        assert engine.limits == {"a": [5, 1], "b": [5, 4]}
+        assert params.max_tokens == 5
+        assert shared_next_params.max_tokens == 5
+        assert [sum(end - start for start, end in item["action_ranges"]) for item in responses] == [5, 5]
+
+    asyncio.run(run())

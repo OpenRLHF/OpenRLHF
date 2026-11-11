@@ -37,6 +37,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
     async def execute(self, prompt, label, sampling_params, max_length: int, hf_tokenizer, llm_engine, images=None):
         # Treat each AgentInstance as an isolated environment; bind every prompt to its own independent instance
         agent_instance = self.agent_instance_cls()
+        max_new_tokens = sampling_params.max_tokens
 
         # Initialize with reset function
         initial_states = {"observation": prompt, "label": label}
@@ -82,6 +83,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
         final_scores = 0
         extra_logs = {}
         is_truncated = False
+        generated_tokens = 0
 
         if sampling_params.logprobs is not None:
             rollout_log_probs = [0.0] * len(current_obs_tokens)
@@ -90,11 +92,20 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
 
         # Execute multiple steps of interaction
         while True:
-            # Next sampling budget
-            sampling_params.max_tokens = max_length - len(current_obs_tokens)
+            # Samples and environments can share sampling parameter objects.
+            sampling_params = deepcopy(sampling_params)
+            # Respect the context, per-sample, and environment-provided limits.
+            remaining_tokens = max_length - len(current_obs_tokens)
+            if max_new_tokens is not None:
+                remaining_tokens = min(remaining_tokens, max_new_tokens - generated_tokens)
+            if sampling_params.max_tokens is not None:
+                remaining_tokens = min(remaining_tokens, sampling_params.max_tokens)
+            sampling_params.max_tokens = remaining_tokens
             # No budget to generate, break
             if sampling_params.max_tokens <= 0:
                 break
+            if getattr(sampling_params, "min_tokens", 0) > remaining_tokens:
+                sampling_params.min_tokens = remaining_tokens
 
             # Generate response asynchronously (input and output are token ids)
             mm_data = {"image": pil_images} if pil_images else None
@@ -104,6 +115,7 @@ class MultiTurnAgentExecutor(AgentExecutorBase):
             action_tokens = request_output.outputs[0].token_ids
             action_text = request_output.outputs[0].text
             is_truncated = request_output.outputs[0].finish_reason == "length"
+            generated_tokens += len(action_tokens)
 
             # Record action range in token space
             action_start = len(current_obs_tokens)
