@@ -100,9 +100,9 @@ def test_unequal_concatenated_batches_can_be_split_and_rebatched(sizes, differen
 @pytest.mark.parametrize("optimizer_cls", [torch.optim.SGD, torch.optim.Adam])
 def test_value_training_uses_the_original_reward_for_every_concatenated_sample(optimizer_cls):
     combined = Experience.concat_experiences(_batches((2, 1), True), pad_token_id=0)
-    features = (
-        (combined.sequences.double() * combined.attention_mask).sum(dim=-1) / combined.total_length
-    ).unsqueeze(-1)
+    features = ((combined.sequences.double() * combined.attention_mask).sum(dim=-1) / combined.total_length).unsqueeze(
+        -1
+    )
     expected_features = torch.tensor([[1.0], [2.0], [3.0]], dtype=torch.float64)
     expected_rewards = torch.tensor([0.1, 0.2, 0.3], dtype=torch.float64)
     torch.manual_seed(17)
