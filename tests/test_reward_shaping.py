@@ -12,6 +12,41 @@ from tests.test_experience import Experience
 from tests.test_loss_aggregation import _loss_module
 
 
+@pytest.mark.parametrize(
+    "answer, target, expected",
+    [
+        ("9007199254740993", "9007199254740992", False),
+        ("-9007199254740993", "-9007199254740992", False),
+        ("9007199254740992.5", "9007199254740992", False),
+        ("-9007199254740992.5", "-9007199254740992", False),
+        ("9,007", "9008", False),
+        ("1e30", "1000000000000000019884624838656", False),
+        ("1000000000000000000000000000001", "1e30", False),
+        ("9007199254740993.0", "9007199254740993", True),
+        ("9,007", "9007", True),
+        ("9.007199254740993e15", "9007199254740993", True),
+        ("1e30", "1000000000000000000000000000000", True),
+        ("-9.007199254740993e15", "-9007199254740993", True),
+        ("2.00000001", "2", True),
+        ("1.99999999", "2", True),
+        ("-1.99999999", "-2", True),
+        ("2.000001", "2", False),
+        ("12.5", "12", False),
+        ("42", "43", False),
+        ("42.0", "42", True),
+    ],
+)
+def test_math_reward_preserves_integer_precision(answer, target, expected):
+    from examples.python.math_reward_func import reward_func
+    from openrlhf.utils.math_utils import grade_answer
+
+    assert grade_answer(answer, target) is expected
+    reward = reward_func([f"question: \\boxed{{{answer}}}"], ["question: "], [target])
+    assert reward["rewards"].tolist() == [float(expected)]
+    assert reward["scores"].tolist() == [float(expected)]
+    assert reward["extra_logs"]["math_accuracy"].item() == float(expected)
+
+
 @pytest.fixture
 def maker_module(agent_modules, monkeypatch):
     monkeypatch.setitem(sys.modules, "openrlhf.models.utils", sys.modules[_loss_module.__package__ + ".utils"])

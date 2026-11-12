@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 import signal
 import threading
+from decimal import Decimal
+from math import isfinite
 
 import sympy
 from pylatexenc import latex2text
@@ -153,21 +155,6 @@ def _parse_latex(expr: str) -> str:
     return expr.strip()
 
 
-def _is_float(num: str) -> bool:
-    try:
-        float(num)
-        return True
-    except Exception:
-        return False
-
-
-def _is_int(value: float) -> bool:
-    try:
-        return abs(value - int(round(value))) <= 1e-7
-    except Exception:
-        return False
-
-
 def _is_frac(expr: str) -> bool:
     return bool(re.search(r"^-?[0-9]+.?/0*[1-9][0-9]*.?$", expr))
 
@@ -184,17 +171,14 @@ def _strip_properly_formatted_commas(expr: str) -> str:
 
 def _str_is_int(value: str) -> bool:
     try:
-        value = _strip_properly_formatted_commas(value)
-        value = float(value)
-        return abs(value - int(round(value))) <= 1e-7
+        value = Decimal(_strip_properly_formatted_commas(value))
+        return isfinite(value) and abs(value - value.to_integral_value()) <= Decimal("1e-7")
     except Exception:
         return False
 
 
 def _str_to_int(value: str) -> int:
-    value = value.replace(",", "")
-    value = float(value)
-    return int(value)
+    return int(Decimal(value.replace(",", "")).to_integral_value())
 
 
 def _inject_implicit_mixed_number(step: str) -> str:
@@ -240,8 +224,8 @@ def _normalize(expr: str | None) -> str | None:
     if len(expr) > 0 and expr[0] == "{" and expr[-1] == "}":
         expr = expr[1:-1]
     expr = re.sub(r",\\! *", "", expr)
-    if _is_float(expr) and _is_int(float(expr)):
-        expr = str(int(round(float(expr))))
+    if _str_is_int(expr):
+        expr = str(_str_to_int(expr))
     if "\\" in expr:
         try:
             expr = _parse_latex(expr)
