@@ -25,17 +25,24 @@ def aggregate_loss(
     ``batch_num_tokens`` (token mode) and ``global_batch_size`` (sample mode) carry the
     *global* batch totals so the loss is invariant to data-parallel sharding; ``dp_size``
     compensates for the gradient averaging that DeepSpeed/DDP applies across DP ranks.
+    Empty masks contribute zero. Only zero normalizers are replaced, since gradient
+    accumulation can produce positive normalizers smaller than one.
     """
     if token_level_loss:
         if batch_num_tokens is None:
             return masked_mean(loss, loss_mask, dim=None)
+        batch_num_tokens = torch.as_tensor(batch_num_tokens, device=loss.device)
+        batch_num_tokens = batch_num_tokens.masked_fill(batch_num_tokens == 0, 1)
         return (loss * loss_mask).sum() / batch_num_tokens * dp_size
 
     token_counts = loss_mask.sum(dim=-1)
-    seq_loss = (loss * loss_mask).sum(dim=-1) / (token_counts + 1e-8)
+    token_normalizer = (token_counts + 1e-8).masked_fill(token_counts == 0, 1)
+    seq_loss = (loss * loss_mask).sum(dim=-1) / token_normalizer
     seq_mask = (token_counts > 0).float()  # exclude fully masked sequences
     if global_batch_size is None:
         return masked_mean(seq_loss, seq_mask, dim=None)
+    global_batch_size = torch.as_tensor(global_batch_size, device=loss.device)
+    global_batch_size = global_batch_size.masked_fill(global_batch_size == 0, 1)
     return (seq_loss * seq_mask).sum() / global_batch_size * dp_size
 
 
