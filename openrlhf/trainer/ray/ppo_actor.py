@@ -391,6 +391,10 @@ class ActorPPOTrainer(ABC):
                 metrics[k] = torch.tensor(v, dtype=torch.float)
                 weights[k] = "sample"
 
+        # Sequence gates count rejected sequences regardless of response length.
+        if is_filter_ratio is not None and self.actor_loss_fn.is_correction_level == "seq":
+            weights["is_filter_ratio"] = "sample"
+
         for f in fields(Experience):
             if f.name in {"rewards", "scores"} or not Experience.is_episode_tensor_field(f.name):
                 continue
