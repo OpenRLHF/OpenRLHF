@@ -138,19 +138,6 @@ def test_length_penalties_extract_only_batch_scalar_counts(kind):
     assert scalar_reads <= len(experiences), scalar_reads
 
 
-def _optimizer_state_equal(actual, expected):
-    assert actual["param_groups"] == expected["param_groups"]
-    assert actual["state"].keys() == expected["state"].keys()
-    for key, state in actual["state"].items():
-        assert state.keys() == expected["state"][key].keys()
-        for name, value in state.items():
-            reference = expected["state"][key][name]
-            if isinstance(value, torch.Tensor):
-                torch.testing.assert_close(value, reference, rtol=0, atol=0)
-            else:
-                assert value == reference
-
-
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("optimizer_type", [torch.optim.SGD, torch.optim.AdamW])
 def test_combined_penalties_preserve_language_model_updates_and_resume(tmp_path, dtype, optimizer_type):
@@ -212,7 +199,17 @@ def test_combined_penalties_preserve_language_model_updates_and_resume(tmp_path,
         reference_optimizer.step()
         for actual, expected in zip(model.parameters(), reference.parameters()):
             torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-        _optimizer_state_equal(optimizer.state_dict(), reference_optimizer.state_dict())
+        actual_state, expected_state = optimizer.state_dict(), reference_optimizer.state_dict()
+        assert actual_state["param_groups"] == expected_state["param_groups"]
+        assert actual_state["state"].keys() == expected_state["state"].keys()
+        for key, state in actual_state["state"].items():
+            assert state.keys() == expected_state["state"][key].keys()
+            for name, value in state.items():
+                expected = expected_state["state"][key][name]
+                if isinstance(value, torch.Tensor):
+                    torch.testing.assert_close(value, expected, rtol=0, atol=0)
+                else:
+                    assert value == expected
 
         if step == 0:
             path = tmp_path / "training.pt"
