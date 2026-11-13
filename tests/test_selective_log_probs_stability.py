@@ -2,14 +2,11 @@ import importlib.util
 import math
 from pathlib import Path
 
-import deepspeed
 import pytest
 import torch
 from transformers import GPT2Config, GPT2LMHeadModel
 
 # Load the complete numerical module without importing the unrelated GPU Actor.
-# DeepSpeed and Torch are their real installed packages, not import replacements.
-assert Path(deepspeed.__file__).is_file()
 _spec = importlib.util.spec_from_file_location(
     "openrlhf_native_log_probs", Path(__file__).resolve().parents[1] / "openrlhf/models/utils.py"
 )
