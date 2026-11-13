@@ -2,8 +2,9 @@ from copy import deepcopy
 
 import pytest
 import torch
-from test_actor_entropy_temperature import Actor
 from transformers import GPT2Config, GPT2LMHeadModel
+
+from .test_actor_entropy_temperature import Actor
 
 
 def _model():
