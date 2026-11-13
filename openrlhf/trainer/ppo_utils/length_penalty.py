@@ -104,7 +104,9 @@ def apply_stop_properly_penalty(
             if stop_properly_penalty_coef < 0:
                 experience.rewards[truncated] = stop_properly_penalty_coef
             else:
-                experience.rewards[truncated] = experience.rewards[truncated] * stop_properly_penalty_coef
+                experience.rewards[truncated] = (experience.rewards[truncated] * stop_properly_penalty_coef).to(
+                    experience.rewards.dtype
+                )
             total_truncated += num_truncated
 
     return total_truncated
