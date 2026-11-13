@@ -8,6 +8,8 @@ Two types of length penalty are supported:
 
 from typing import List
 
+import torch
+
 from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
@@ -41,19 +43,23 @@ def apply_overlong_penalty(
     expected_len = max_new_tokens - overlong_buffer_len
     total_penalized = 0
 
+    if overlong_buffer_len <= 0:
+        return total_penalized
+
     for experience in experiences:
-        response_lengths = experience.response_length
-        batch_size = len(response_lengths)
-
-        for j in range(batch_size):
-            valid_response_length = response_lengths[j].item()
-            # Cap the exceed_len to overlong_buffer_len to prevent excessive penalty
-            exceed_len = min(valid_response_length - expected_len, overlong_buffer_len)
-
-            if exceed_len > 0:
-                overlong_penalty = -exceed_len / overlong_buffer_len * overlong_penalty_factor
-                experience.rewards[j] += overlong_penalty
-                total_penalized += 1
+        # Match the Python scalar calculation before rounding the penalty to the reward dtype.
+        exceed_len = (experience.response_length.detach().to(torch.float64) - expected_len).clamp(
+            max=overlong_buffer_len
+        )
+        penalized = exceed_len > 0
+        num_penalized = int(penalized.sum().item())
+        if num_penalized:
+            penalties = -exceed_len[penalized] / overlong_buffer_len * overlong_penalty_factor
+            penalties = penalties.to(experience.rewards.device)
+            if experience.rewards.is_floating_point():
+                penalties = penalties.to(experience.rewards.dtype)
+            experience.rewards[penalized.to(experience.rewards.device)] += penalties
+            total_penalized += num_penalized
 
     return total_penalized
 
@@ -92,16 +98,14 @@ def apply_stop_properly_penalty(
         if truncated_flags is None:
             continue
 
-        batch_size = len(truncated_flags)
-        for j in range(batch_size):
-            if truncated_flags[j].item():
-                if stop_properly_penalty_coef < 0:
-                    # Fixed negative reward for truncated samples
-                    experience.rewards[j] = stop_properly_penalty_coef
-                else:
-                    # Scale truncated sample rewards by the penalty coefficient
-                    experience.rewards[j] = experience.rewards[j] * stop_properly_penalty_coef
-                total_truncated += 1
+        truncated = truncated_flags.to(device=experience.rewards.device, dtype=torch.bool)
+        num_truncated = int(truncated.sum().item())
+        if num_truncated:
+            if stop_properly_penalty_coef < 0:
+                experience.rewards[truncated] = stop_properly_penalty_coef
+            else:
+                experience.rewards[truncated] = experience.rewards[truncated] * stop_properly_penalty_coef
+            total_truncated += num_truncated
 
     return total_truncated
 
