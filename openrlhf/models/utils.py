@@ -5,6 +5,7 @@ import deepspeed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 def set_z3_leaf_modules(model: nn.Module, detect_hybrid: bool = True) -> None:
@@ -159,16 +160,6 @@ def compute_reward(
     return reward
 
 
-def _logsumexp_by_chunk(logits: torch.Tensor, chunk_size: int = 1024) -> torch.Tensor:
-    seq_len = logits.shape[0]
-    logsumexp_values = torch.zeros((seq_len), device=logits.device, dtype=logits.dtype)
-    for s_idx in range(0, seq_len, chunk_size):
-        end_idx = min(s_idx + chunk_size, seq_len)
-        logsumexp_values[s_idx:end_idx] = torch.logsumexp(logits[s_idx:end_idx], dim=-1)
-
-    return logsumexp_values
-
-
 def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
     if temperature != 1.0:
         logits.div_(temperature)
@@ -182,10 +173,20 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperatur
             output = cross_entropy_loss(logits.reshape(-1, last_dim), labels.reshape(-1))
             log_probs_labels = -output[0].view(*batch_dim)
         except ImportError:
-            logits_labels = torch.gather(logits, dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
-            logsumexp_values = _logsumexp_by_chunk(logits.reshape(-1, last_dim))
-            logsumexp_values = logsumexp_values.view(*batch_dim)
-            log_probs_labels = logits_labels - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
+            flat_logits = logits.reshape(-1, last_dim)
+            flat_labels = labels.reshape(-1, 1)
+            log_probs_labels = flat_logits.gather(dim=-1, index=flat_labels).squeeze(-1)
+            # Normalize before gathering; recompute chunks so backward does not retain
+            # an additional full-vocabulary log-softmax tensor for every token.
+            for start in range(0, flat_logits.shape[0], 1024):
+                log_probs_labels[start : start + 1024] = checkpoint(
+                    lambda x, y: F.log_softmax(x, dim=-1).gather(dim=-1, index=y).squeeze(-1),
+                    flat_logits[start : start + 1024],
+                    flat_labels[start : start + 1024],
+                    use_reentrant=False,
+                    preserve_rng_state=False,
+                )
+            log_probs_labels = log_probs_labels.view(*batch_dim)
     else:
         log_probs_labels = []
         for row_logits, row_labels in zip(logits, labels):  # loop to reduce peak mem consumption
