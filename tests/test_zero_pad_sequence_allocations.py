@@ -4,13 +4,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 from datasets import Dataset
-from openrlhf.datasets import SFTDataset
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 from torch.utils.data import DataLoader
 from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
 
+from openrlhf.datasets import SFTDataset
 from openrlhf.utils.utils import zero_pad_sequences
 
 
