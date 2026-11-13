@@ -95,6 +95,8 @@ def zero_pad_sequences(
 ) -> torch.Tensor:
     assert side in ("left", "right")
     max_len = max(seq.size(-1) for seq in sequences)
+    if len(sequences) == 1:
+        return torch.stack(sequences, dim=0) if stack else torch.cat(sequences, dim=0)
     padded_sequences = []
     for seq in sequences:
         pad_len = max_len - seq.size(-1)
