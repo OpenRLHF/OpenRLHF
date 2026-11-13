@@ -16,7 +16,7 @@ from openrlhf.utils.utils import zero_pad_sequences
 
 @pytest.mark.parametrize("side", ["left", "right"])
 @pytest.mark.parametrize("stack", [False, True])
-@pytest.mark.parametrize("lengths", [(3, 3), (1, 4, 0), (0, 0)])
+@pytest.mark.parametrize("lengths", [(3,), (0,), (3, 3), (1, 4, 0), (0, 0)])
 @pytest.mark.parametrize("dtype", [torch.int64, torch.float64, torch.bool])
 def test_padding_values_layouts_and_independent_output(side, stack, lengths, dtype):
     inputs = []
@@ -42,8 +42,9 @@ def test_padding_values_layouts_and_independent_output(side, stack, lengths, dty
 
 @pytest.mark.parametrize("side", ["left", "right"])
 @pytest.mark.parametrize("stack", [False, True])
-def test_zero_width_padding_preserves_autograd(side, stack):
-    inputs = [torch.arange(2 * length, dtype=torch.float64).reshape(2, length).requires_grad_() for length in (2, 5)]
+@pytest.mark.parametrize("lengths", [(5,), (2, 5)])
+def test_zero_width_padding_preserves_autograd(side, stack, lengths):
+    inputs = [torch.arange(2 * length, dtype=torch.float64).reshape(2, length).requires_grad_() for length in lengths]
     references = [tensor.detach().clone().requires_grad_() for tensor in inputs]
     padded = []
     for tensor in references:
@@ -59,17 +60,36 @@ def test_zero_width_padding_preserves_autograd(side, stack):
 
 
 @pytest.mark.parametrize("stack", [False, True])
-def test_equal_length_batches_allocate_only_the_combined_output(stack):
-    inputs = [torch.arange(8 * 4096, dtype=torch.float32).reshape(8, 4096) for _ in range(2)]
+def test_single_sequence_batches_allocate_only_the_combined_output(stack):
+    inputs = [torch.arange(8 * 4096, dtype=torch.float32).reshape(8, 4096)]
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU], profile_memory=True) as profile:
         result = zero_pad_sequences(inputs, side="right", stack=stack)
     allocated = sum(max(event.self_cpu_memory_usage, 0) for event in profile.events())
     output_bytes = result.numel() * result.element_size()
-    # The final cat/stack still owns its output; zero-width padding needs no
-    # additional full-sized clones before that allocation.
+    # The final cat/stack still owns its output; a single sequence needs no
+    # additional full-sized padding clone before that allocation.
     assert allocated <= output_bytes + 4096, (allocated, output_bytes)
     for tensor in inputs:
         assert result.untyped_storage().data_ptr() != tensor.untyped_storage().data_ptr()
+
+
+@pytest.mark.parametrize("stack", [False, True])
+@pytest.mark.parametrize("layout", ["transpose", "expanded", "channels_last"])
+def test_single_sequence_preserves_output_layout_and_ownership(stack, layout):
+    if layout == "transpose":
+        tensor = torch.arange(24).reshape(2, 3, 4).transpose(1, 2)
+    elif layout == "expanded":
+        tensor = torch.arange(6).expand(3, -1)
+    else:
+        tensor = torch.arange(120).reshape(2, 3, 4, 5).contiguous(memory_format=torch.channels_last)
+    original = tensor.clone()
+    padded = F.pad(tensor, (0, 0), value=7)
+    expected = torch.stack([padded]) if stack else torch.cat([padded])
+    actual = zero_pad_sequences([tensor], side="right", value=7, stack=stack)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert actual.stride() == expected.stride()
+    actual.fill_(0)
+    torch.testing.assert_close(tensor, original, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("pretrain_mode", [False, True])
