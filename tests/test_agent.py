@@ -36,9 +36,9 @@ def test_remote_rewards_distribute_nonempty_shards(monkeypatch, query_count, rou
             received.append(payload)
             requests_per_replica[request.match_info["replica"]] += 1
             # The shipped reward server requires a nonempty query batch.
-            if not payload["query"]:
+            if not payload["queries"]:
                 raise web.HTTPBadRequest(text="empty query batch")
-            return web.json_response({"rewards": [float(q) for q in payload["query"]]})
+            return web.json_response({"rewards": [float(q) for q in payload["queries"]]})
 
         app = web.Application()
         app.router.add_post("/{replica}", get_reward)
@@ -57,14 +57,14 @@ def test_remote_rewards_distribute_nonempty_shards(monkeypatch, query_count, rou
             ]
             results = await asyncio.gather(*calls) if concurrent else [await call for call in calls]
 
-        assert all(payload["query"] for payload in received)
+        assert all(payload["queries"] for payload in received)
         counts = [requests_per_replica[str(i)] for i in range(replicas)]
         assert max(counts) - min(counts) <= 1
         assert [reward for batch in results for result in batch for reward in result["rewards"]] == list(
             range(query_count * rounds)
         )
-        received.sort(key=lambda payload: int(payload["query"][0]))
-        for key, expected in (("query", queries), ("prompts", prompts), ("labels", labels)):
+        received.sort(key=lambda payload: int(payload["queries"][0]))
+        for key, expected in (("queries", queries), ("prompts", prompts), ("labels", labels)):
             assert [value for payload in received for value in payload[key]] == expected
 
     asyncio.run(run())

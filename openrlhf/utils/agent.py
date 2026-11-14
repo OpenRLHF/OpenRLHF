@@ -339,7 +339,7 @@ class SingleTurnAgentExecutor(AgentExecutorBase):
             rm = next(self._reward_endpoint_cycle)
             end_idx = min((i + 1) * batch_size, len(queries_list))
             payload = {
-                "query": queries_list[start_idx:end_idx],
+                "queries": queries_list[start_idx:end_idx],
                 "prompts": prompts_list[start_idx:end_idx],
                 "labels": labels_list[start_idx:end_idx],
             }
