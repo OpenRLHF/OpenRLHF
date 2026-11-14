@@ -128,7 +128,8 @@ if __name__ == "__main__":
     @app.post("/get_reward")
     async def get_reward(request: Request):
         data = await request.json()
-        queries = data.get("query")
+        # Prefer "queries"; keep "query" so older HTTP clients still work.
+        queries = data.get("queries", data.get("query"))
         rewards = reward_model.get_reward(queries)
         result = {"rewards": rewards, "scores": rewards, "extra_logs": {"dummy_scores": rewards}}
         logger.info(f"Sent JSON: {result}")
