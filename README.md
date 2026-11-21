@@ -700,6 +700,12 @@ For multi-turn agents that need an OpenAI-compatible chat API (e.g., integrating
 - Delta-tokenization reuses prefix tokens across multi-turn calls
 - Override `run_agent()` to plug in your own multi-turn workflow
 
+Within a `session_id`, send the previous messages unchanged, followed by the returned assistant
+`content` and new feedback. The executor preserves sampled token IDs, including earlier reasoning,
+even when the chat template rewrites history. Template closure added after a length stop is observation,
+not a sampled action. Editing history or changing its structured representation requires a new session;
+templates whose reply boundary cannot be located safely are rejected.
+
 ```bash
 python3 -m openrlhf.cli.train_ppo_ray \
   --train.agent_func_path examples/python/agent_func_openai_server_executor.py \
