@@ -126,6 +126,22 @@ def test_policy_loss_token_mean_aggregation_matches_full_batch():
     assert torch.allclose((rank0_loss + rank1_loss) / 2, full_loss)
 
 
+def test_policy_loss_token_mean_backward_with_clipping_and_mask():
+    ratios = torch.tensor([[1.4, 1.1, 0.9], [0.6, 1.3, 1.0]], dtype=torch.float64)
+    old = torch.full_like(ratios, -2.0)
+    current = (old + ratios.log()).requires_grad_()
+    advantages = torch.tensor([[1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]], dtype=torch.float64)
+    mask = torch.tensor([[1, 1, 1], [1, 1, 0]], dtype=torch.bool)
+    loss_fn = PolicyLoss()
+    loss, *_ = loss_fn(current, old, advantages, action_mask=mask, batch_num_tokens=mask.sum())
+    (gradient,) = torch.autograd.grad(loss, current)
+
+    # The upper clip applies to positive advantage and the lower clip to negative advantage.
+    expected = torch.tensor([[0.0, -1.1, -0.9], [0.0, 1.3, 0.0]], dtype=torch.float64) / 5
+    torch.testing.assert_close(loss, torch.tensor(-0.22, dtype=torch.float64))
+    torch.testing.assert_close(gradient, expected)
+
+
 def test_policy_kl_metric_uses_policy_ratio_when_vllm_correction_is_enabled():
     log_probs = torch.tensor([[-0.2, -0.4]])
     old_log_probs = torch.tensor([[-0.3, -0.1]])
