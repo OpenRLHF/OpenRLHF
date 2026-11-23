@@ -52,7 +52,8 @@ def blending_datasets(
             ext = ext.lower().strip(".")
             if ext == "jsonl":
                 ext = "json"
-            data = load_dataset(ext, data_files=dataset)
+            # A single file is already the dataset, regardless of the CLI split name.
+            data = load_dataset(ext, data_files=dataset, split="train")
             strategy.print(f"loaded {dataset} with data_files={dataset}")
         # local dataset saved with `datasets.Dataset.save_to_disk`
         elif os.path.isdir(dataset):
@@ -74,7 +75,13 @@ def blending_datasets(
             strategy.print(f"loaded {dataset} from files")
 
         # Select dataset
-        if dataset_split and not isinstance(data, Dataset) and dataset_split in data:
+        if not isinstance(data, Dataset):
+            if dataset_split not in data:
+                available_splits = ", ".join(sorted(data))
+                raise ValueError(
+                    f"Dataset {dataset!r} does not contain split {dataset_split!r}. "
+                    f"Available splits: {available_splits}."
+                )
             data = data[dataset_split]
         data = data.select(range(min(max_count, len(data))))
         data_list.append(data)
