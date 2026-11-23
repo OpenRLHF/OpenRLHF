@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import sys
 import types
@@ -136,3 +137,61 @@ def test_dynamic_filtering_preserves_terminal_accepted_rollouts(samples_generato
     assert prompts_consumed == 3
     assert exhausted is True
     assert fake_ray.cancelled == []
+
+
+def test_eval_keeps_datasource_for_identical_prompts(samples_generator_module):
+    module, fake_ray = samples_generator_module
+    generator = module.SamplesGenerator(
+        SimpleNamespace(
+            args=SimpleNamespace(rollout=SimpleNamespace(batch_size=2), vllm=SimpleNamespace(enable_sleep=False))
+        ),
+        None,
+        [(["alpha", "beta"], ["same prompt", "same prompt"], ["A", "B"], [None, None])],
+        None,
+        [],
+    )
+    groups = {
+        "first": [
+            SimpleNamespace(
+                prompts=["same prompt"],
+                rewards=torch.tensor([reward]),
+                scores=None,
+                response_length=torch.tensor([5]),
+                truncated=torch.tensor([False]),
+            )
+            for reward in (0.0, 1.0)
+        ],
+        "second": [
+            SimpleNamespace(
+                prompts=["same prompt"],
+                rewards=torch.tensor([reward]),
+                scores=None,
+                response_length=torch.tensor([9]),
+                truncated=torch.tensor([True]),
+            )
+            for reward in (0.0, 0.0)
+        ],
+    }
+    generator._dispatch_prompts_to_vllm = lambda *_args, **_kwargs: ["first", "second"]
+    generator._process_response_into_experience = lambda response, **_kwargs: response
+    fake_ray.wait = lambda refs, **_kwargs: (refs[-1:], refs[:-1])
+    fake_ray.get = groups.__getitem__
+
+    samples = generator.generate_eval_samples(n_samples_per_prompt=2)
+    assert [sample.datasources for sample in samples] == [["beta"], ["beta"], ["alpha"], ["alpha"]]
+
+    # Load the metric function without importing the GPU-backed trainer stack.
+    path = Path(__file__).resolve().parents[1] / "openrlhf" / "trainer" / "ppo_trainer.py"
+    tree = ast.parse(path.read_text())
+    function = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "compute_eval_metrics"
+    )
+    namespace = {"torch": torch}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
+    metrics = namespace["compute_eval_metrics"](samples, 2)
+    assert metrics["eval_alpha_pass2"] == 1.0
+    assert metrics["eval_alpha_pass1"] == 0.5
+    assert metrics["eval_beta_pass2"] == 0.0
+    assert metrics["eval_alpha_response_length_mean"] == 5
+    assert metrics["eval_beta_truncated_rate"] == 1.0
+    assert metrics["eval_num_samples"] == 4
