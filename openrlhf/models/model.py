@@ -67,6 +67,14 @@ def get_llm_for_sequence_regression(
     ), f"invalid model_type: {model_type}, should be critic or reward."
 
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    text_config = getattr(config, "text_config", config)
+    # Reward and critic packing has the same state-boundary limitation as the actor (#1421).
+    if packing_samples and "linear_attention" in (getattr(text_config, "layer_types", None) or []):
+        raise ValueError(
+            "packing_samples is not supported for models with linear_attention layers (e.g. Qwen3.5): "
+            "recurrent/convolution state can leak across samples. Disable --ds.packing_samples and "
+            "--train.dynamic_batch_enable, and set --ds.ring_attn_size 1."
+        )
     config.normalize_reward = normalize_reward
     config._attn_implementation = attn_implementation
 
