@@ -25,6 +25,24 @@ def maker_module(agent_modules, monkeypatch):
     return module
 
 
+@pytest.mark.parametrize("gamma,lambd", [(0.9, 0.8), (1.0, 0.0), (1.0, 1.0)])
+@pytest.mark.parametrize("value_dtype", [torch.float32, torch.bfloat16])
+def test_gae_skips_observation_tokens(maker_module, gamma, lambd, value_dtype):
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    # Both rows contain the same two actions; only the first has an intervening tool observation.
+    mask = torch.tensor([[1, 0, 0, 1], [0, 1, 1, 0]], dtype=torch.bool)
+    values = torch.tensor([[0.25, 3.0, 4.0, 0.75], [0.0, 0.25, 0.75, 0.0]], dtype=value_dtype)
+    rewards = torch.tensor([[0.0, 2.0, 3.0, 1.0], [0.0, 0.0, 1.0, 0.0]])
+    advantages, returns = maker.get_advantages_and_returns(values, rewards, mask, gamma, lambd)
+
+    # The terminal advantage is 1 - 0.75. The preceding action bootstraps from 0.75.
+    expected = torch.tensor([gamma * 0.75 - 0.25 + gamma * lambd * 0.25, 0.25]).repeat(2)
+    torch.testing.assert_close(advantages[mask], expected)
+    torch.testing.assert_close(returns[mask], expected + values[mask])
+    assert not advantages[~mask].any()
+    assert not returns[~mask].any()
+
+
 @pytest.mark.parametrize(
     "estimator", ["gae", "reinforce", "group_norm", "rloo", "reinforce_baseline", "dr_grpo", "flash_reinforce"]
 )
