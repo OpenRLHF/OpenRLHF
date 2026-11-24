@@ -294,6 +294,7 @@ class ActorPPOTrainer(ABC):
             action_mask,
             attention_mask=attention_mask,
             return_output=True,
+            return_logits=False,
             ring_attn_group=self.strategy.ring_attn_group,
             packed_seq_lens=packed_seq_lens,
             return_entropy=self.args.actor.entropy_coef is not None,

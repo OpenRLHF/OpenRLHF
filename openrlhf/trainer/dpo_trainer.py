@@ -317,6 +317,7 @@ class DPOTrainer(ABC):
             attention_mask=att_masks,
             return_output=True,
             return_logprobs=True,
+            return_logits=False,
             ring_attn_group=self.strategy.ring_attn_group,
         )
 

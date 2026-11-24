@@ -229,9 +229,15 @@ class Actor(nn.Module):
         ring_attn_group: Optional[dist.ProcessGroup] = None,
         packed_seq_lens: Optional[list[int]] = None,
         return_entropy=False,
+        return_logits=True,
         **mm_inputs,
     ) -> torch.Tensor:
-        """Returns action log probs"""
+        """Return action log probs; opt-out outputs set ``logits`` to ``None``."""
+        return_action_log_probs = action_mask is not None
+        return_any_log_probs = return_action_log_probs or return_logprobs
+        if not return_logits and not return_any_log_probs:
+            raise ValueError("return_logits=False requires action_mask or return_logprobs=True")
+
         batch, seqlen = sequences.size()
         if self.packing_samples:
             sequences, position_ids, rolled_sequences, ring_attn_pad_len, indices = unpad_and_slice_tensor(
@@ -263,12 +269,37 @@ class Actor(nn.Module):
                 position_ids.masked_fill_(attention_mask == 0, 1)
 
         output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, **mm_inputs)
-        # https://github.com/OpenRLHF/OpenRLHF/pull/634
-        output["logits"] = output["logits"].to(torch.float32)
-        # Scale once here so the entropy below and the log probs describe the same
-        # temperature-scaled policy that the rollout sampled from.
-        if self.temperature != 1.0:
-            output["logits"].div_(self.temperature)
+        logits = output["logits"]
+        use_flash_log_probs = (
+            return_any_log_probs
+            and not return_entropy
+            and (not return_output or not return_logits)
+            and logits.is_cuda
+            and logits.dtype in (torch.float16, torch.bfloat16)
+        )
+        if use_flash_log_probs:
+            try:
+                from flash_attn.ops.triton.cross_entropy import cross_entropy_loss
+            except ImportError:
+                use_flash_log_probs = False
+
+        if use_flash_log_probs:
+            # Avoid the full FP32 policy-logit copy on long-context policy paths (#1422);
+            # FlashAttention still accumulates the selected log probabilities in FP32.
+            ce_output = cross_entropy_loss(
+                logits.reshape(-1, logits.shape[-1]),
+                rolled_sequences.reshape(-1),
+                logit_scale=1 / self.temperature,
+            )
+            log_probs = -ce_output[0].view(*rolled_sequences.shape)
+        else:
+            # https://github.com/OpenRLHF/OpenRLHF/pull/634
+            output["logits"] = logits.to(torch.float32)
+            del logits
+            # Scale once here so the entropy below and the log probs describe the same
+            # temperature-scaled policy that the rollout sampled from.
+            if self.temperature != 1.0:
+                output["logits"].div_(self.temperature)
 
         if return_entropy:
             assert return_output
@@ -277,7 +308,6 @@ class Actor(nn.Module):
                 entropy = gather_and_pad_tensor(entropy, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
             setattr(output, "entropy", entropy[:, :-1])
 
-        return_action_log_probs = action_mask is not None
         if not return_action_log_probs and not return_logprobs:
             assert return_output
             if allgather_logits and self.packing_samples:
@@ -286,7 +316,11 @@ class Actor(nn.Module):
                 )
             return output
 
-        log_probs = log_probs_from_logits(output["logits"], rolled_sequences)
+        if not use_flash_log_probs:
+            log_probs = log_probs_from_logits(output["logits"], rolled_sequences)
+
+        if return_output and not return_logits:
+            output["logits"] = None
 
         if self.packing_samples:
             log_probs = gather_and_pad_tensor(log_probs, ring_attn_group, ring_attn_pad_len, indices, batch, seqlen)
