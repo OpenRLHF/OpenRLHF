@@ -103,10 +103,12 @@ class Actor(nn.Module):
             )
             text_config = getattr(config, "text_config", config)
             # Position resets do not isolate recurrent or convolution state (#1421).
-            if "linear_attention" in (getattr(text_config, "layer_types", None) or []):
+            if {"linear_attention", "conv"}.intersection(getattr(text_config, "layer_types", None) or []) or getattr(
+                text_config, "model_type", None
+            ) == "mamba2":
                 raise ValueError(
-                    "packing_samples is not supported for models with linear_attention layers (e.g. Qwen3.5): "
-                    "recurrent/convolution state can leak across samples. Disable --ds.packing_samples and "
+                    "packing_samples is not supported for models with recurrent, convolutional, or state-space layers "
+                    "(e.g. Qwen3.5, LFM2, Mamba2): state can leak across samples. Disable --ds.packing_samples and "
                     "--train.dynamic_batch_enable, and set --ds.ring_attn_size 1."
                 )
 

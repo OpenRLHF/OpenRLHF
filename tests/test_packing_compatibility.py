@@ -10,7 +10,9 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 from transformers import (
+    Lfm2Config,
     LlamaConfig,
+    Mamba2Config,
     Qwen3_5Config,
     Qwen3_5MoeConfig,
     Qwen3Config,
@@ -88,6 +90,36 @@ def _full_attention_config():
     )
 
 
+def _lfm2_config():
+    return Lfm2Config(
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        full_attn_idxs=[1],
+    )
+
+
+def _lfm2_attention_only_config():
+    return Lfm2Config(
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        full_attn_idxs=[0, 1],
+    )
+
+
+def _mamba2_config():
+    return Mamba2Config(hidden_size=128, num_heads=2, head_dim=64, expand=1, num_hidden_layers=2)
+
+
+def _mamba2_legacy_config():
+    return SimpleNamespace(model_type="mamba2")
+
+
 def _assert_incompatible_packing_error(call):
     with pytest.raises(ValueError) as raised:
         call()
@@ -129,10 +161,27 @@ def test_actor_pretrained_hybrid_packing_fails_before_loading(monkeypatch, confi
 
 
 @pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(_lfm2_config(), id="lfm2-convolution"),
+        pytest.param(_mamba2_config(), id="mamba2-config"),
+        pytest.param(_mamba2_legacy_config(), id="mamba2-legacy-no-layer-types"),
+    ],
+)
+def test_actor_pretrained_stateful_packing_fails_before_loading(monkeypatch, config):
+    _patch_actor_loading(monkeypatch, config)
+
+    _assert_incompatible_packing_error(lambda: Actor("local-test-model", packing_samples=True))
+
+
+@pytest.mark.parametrize(
     "config,packing_samples",
     [
         pytest.param(Qwen3_5Config(), False, id="hybrid-unpacked"),
         pytest.param(_full_attention_config(), True, id="full-attention-packed"),
+        pytest.param(_lfm2_attention_only_config(), True, id="lfm2-attention-only-packed"),
+        pytest.param(_lfm2_config(), False, id="lfm2-convolution-unpacked"),
+        pytest.param(_mamba2_config(), False, id="mamba2-unpacked"),
         pytest.param(
             LlamaConfig(num_hidden_layers=2, hidden_size=128, intermediate_size=256),
             True,
@@ -157,10 +206,27 @@ def test_actor_module_hybrid_packing_fails(config):
 
 
 @pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(_lfm2_config(), id="lfm2-convolution"),
+        pytest.param(_mamba2_config(), id="mamba2-config"),
+        pytest.param(_mamba2_legacy_config(), id="mamba2-legacy-no-layer-types"),
+    ],
+)
+def test_actor_module_stateful_packing_fails(config):
+    model = torch.nn.Module()
+    model.config = config
+    _assert_incompatible_packing_error(lambda: Actor(model, packing_samples=True))
+
+
+@pytest.mark.parametrize(
     "config,packing_samples",
     [
         pytest.param(Qwen3_5Config(), False, id="hybrid-unpacked"),
         pytest.param(_full_attention_config(), True, id="full-attention-packed"),
+        pytest.param(_lfm2_attention_only_config(), True, id="lfm2-attention-only-packed"),
+        pytest.param(_lfm2_config(), False, id="lfm2-convolution-unpacked"),
+        pytest.param(_mamba2_config(), False, id="mamba2-unpacked"),
         pytest.param(
             LlamaConfig(num_hidden_layers=2, hidden_size=128, intermediate_size=256),
             True,
@@ -215,8 +281,49 @@ def test_sequence_regression_factory_rejects_hybrid_packing_before_loading(monke
 
 
 @pytest.mark.parametrize("model_type", ["reward", "critic"])
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(_lfm2_config(), id="lfm2-convolution"),
+        pytest.param(_mamba2_config(), id="mamba2-config"),
+        pytest.param(_mamba2_legacy_config(), id="mamba2-legacy-no-layer-types"),
+    ],
+)
+def test_sequence_regression_factory_rejects_stateful_packing_before_loading(monkeypatch, config, model_type):
+    _patch_sequence_regression_factory(monkeypatch, config)
+
+    _assert_incompatible_packing_error(
+        lambda: MODULES.model.get_llm_for_sequence_regression("local-test-model", model_type, packing_samples=True)
+    )
+
+
+@pytest.mark.parametrize("model_type", ["reward", "critic"])
 def test_sequence_regression_factory_allows_unpacked_hybrid(monkeypatch, model_type):
     config = Qwen3NextConfig()
+    _patch_sequence_regression_factory(monkeypatch, config)
+
+    loaded = torch.nn.Module()
+    loaded.config = config
+    monkeypatch.setattr(
+        _FakePretrainedModel,
+        "from_pretrained",
+        classmethod(lambda cls, *_, **__: loaded),
+    )
+
+    assert (
+        MODULES.model.get_llm_for_sequence_regression("local-test-model", model_type, packing_samples=False) is loaded
+    )
+
+
+@pytest.mark.parametrize("model_type", ["reward", "critic"])
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(_lfm2_config(), id="lfm2-convolution"),
+        pytest.param(_mamba2_config(), id="mamba2-config"),
+    ],
+)
+def test_sequence_regression_factory_allows_unpacked_stateful(monkeypatch, config, model_type):
     _patch_sequence_regression_factory(monkeypatch, config)
 
     loaded = torch.nn.Module()
