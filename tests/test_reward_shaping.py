@@ -147,3 +147,95 @@ def test_flash_reinforce_centers_on_the_rollout_batch_mean_without_whitening(mak
     result = maker.compute_advantages_and_returns([experience])[0]
     torch.testing.assert_close(result.advantages, torch.tensor([0.75, -0.25, -0.25, -0.25])[:, None].expand(-1, 2))
     torch.testing.assert_close(result.advantages, result.returns)
+
+
+@pytest.mark.parametrize("gamma", [0.0, 0.5, 0.95, 1.0])
+def test_reinforce_discount_skips_non_action_observation_tokens(maker_module, gamma):
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    rewards = torch.tensor([[0.0, 0.0, 1.0]])
+    action_mask = torch.tensor([[True, False, True]])
+
+    returns = maker.get_cumulative_returns(rewards, action_mask, gamma)
+
+    expected = torch.tensor([[gamma, 0.0, 1.0]])
+    torch.testing.assert_close(returns * action_mask, expected)
+
+
+def test_reinforce_mask_none_keeps_position_discount(maker_module):
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    rewards = torch.tensor([[0.2, 0.0, 1.0]])
+
+    returns = maker.get_cumulative_returns(rewards, None, 0.5)
+
+    torch.testing.assert_close(returns, torch.tensor([[0.45, 0.5, 1.0]]))
+
+
+def test_reinforce_action_returns_handle_mixed_gaps_padding_and_kl_rewards(maker_module):
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    rewards = torch.tensor(
+        [
+            [0.2, 9.0, 1.0, 8.0, 8.0, 8.0],
+            [0.3, 0.4, 7.0, 7.0, 7.0, 7.0],
+            [0.1, 6.0, 6.0, 0.5, 6.0, 1.5],
+        ]
+    )
+    action_mask = torch.tensor(
+        [
+            [True, False, True, False, False, False],
+            [True, True, False, False, False, False],
+            [True, False, False, True, False, True],
+        ]
+    )
+
+    returns = maker.get_cumulative_returns(rewards, action_mask, 0.5)
+
+    expected = torch.tensor(
+        [
+            [0.7, 0.0, 1.0, 0.0, 0.0, 0.0],
+            [0.5, 0.4, 0.0, 0.0, 0.0, 0.0],
+            [0.725, 0.0, 0.0, 1.25, 0.0, 1.5],
+        ]
+    )
+    torch.testing.assert_close(returns * action_mask, expected)
+
+
+def test_reinforce_action_returns_reach_policy_loss_gradient(maker_module):
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    rewards = torch.tensor([[0.0, 0.0, 1.0]])
+    action_mask = torch.tensor([[True, False, True]])
+    returns = maker.get_cumulative_returns(rewards, action_mask, 0.5)
+    log_probs = torch.zeros_like(returns, requires_grad=True)
+
+    loss, *_ = _loss_module.PolicyLoss()(log_probs, log_probs.detach(), returns, action_mask)
+    loss.backward()
+
+    torch.testing.assert_close(log_probs.grad, torch.tensor([[-0.25, 0.0, -0.5]]))
+
+
+def test_reinforce_processing_preserves_masked_kl_and_policy_gradient(maker_module):
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    maker.advantage_estimator = "reinforce"
+    maker.kl_ctl = SimpleNamespace(value=1.0)
+    maker.strategy = SimpleNamespace(
+        args=SimpleNamespace(
+            rollout=SimpleNamespace(n_samples_per_prompt=1),
+            reward=SimpleNamespace(clip_range=None),
+            algo=SimpleNamespace(advantage=SimpleNamespace(estimator="reinforce", gamma=0.5, no_std_norm=True)),
+        )
+    )
+    experience = Experience(
+        index=[0],
+        rewards=torch.tensor([1.0]),
+        action_mask=torch.tensor([[True, False, True]]),
+        kl=torch.tensor([[0.1, 0.0, 0.2]]),
+        values=torch.zeros(1, 3),
+        info={"reward": torch.tensor([1.0])},
+    )
+
+    result = maker.compute_advantages_and_returns([experience])[0]
+    log_probs = torch.zeros_like(result.advantages, requires_grad=True)
+    loss, *_ = _loss_module.PolicyLoss()(log_probs, log_probs.detach(), result.advantages, result.action_mask)
+    loss.backward()
+
+    torch.testing.assert_close(result.returns * result.action_mask, torch.tensor([[0.3, 0.0, 0.8]]))
+    torch.testing.assert_close(log_probs.grad, torch.tensor([[0.125, 0.0, -0.125]]))
