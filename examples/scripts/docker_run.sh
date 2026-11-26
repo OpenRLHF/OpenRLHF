@@ -1,7 +1,8 @@
 set -x
 
 PROJECT_PATH=$(cd $(dirname $0)/../../; pwd)
-IMAGE_NAME="nvcr.io/nvidia/pytorch:26.03-py3"
+# Build it first: docker build -t openrlhf dockerfile
+IMAGE_NAME="openrlhf"
 
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
 	-v $PROJECT_PATH:/openrlhf -v  $HOME/.cache:/root/.cache -v  $HOME/.bash_history2:/root/.bash_history \

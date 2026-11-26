@@ -291,12 +291,13 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 **推荐**：使用 Docker 以实现无忧设置
 
 ```bash
-# 1. 启动 Docker 容器
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:26.03-py3 bash
+# 1. 构建镜像（CUDA 13.0、vLLM 0.34.0、DeepSpeed、FlashAttention）
+git clone https://github.com/OpenRLHF/OpenRLHF.git && cd OpenRLHF
+docker build -t openrlhf dockerfile
 
-# 2. 清理冲突包
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
+# 2. 启动 Docker 容器
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
+  -v $PWD:/openrlhf openrlhf bash
 
 # 3. 安装 OpenRLHF（选择一个）
 pip install openrlhf                    # 基础

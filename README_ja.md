@@ -286,12 +286,13 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 **推奨**：手間のかからないセットアップのためにDockerを使用
 
 ```bash
-# 1. Dockerコンテナを起動
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:26.03-py3 bash
+# 1. イメージをビルド（CUDA 13.0、vLLM 0.34.0、DeepSpeed、FlashAttention）
+git clone https://github.com/OpenRLHF/OpenRLHF.git && cd OpenRLHF
+docker build -t openrlhf dockerfile
 
-# 2. 競合するパッケージをクリーンアップ
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
+# 2. Dockerコンテナを起動
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
+  -v $PWD:/openrlhf openrlhf bash
 
 # 3. OpenRLHFをインストール（1つ選択）
 pip install openrlhf                    # 基本

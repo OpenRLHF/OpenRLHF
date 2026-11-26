@@ -14,7 +14,8 @@
 # project settings
 OPENRLHF_PATH=<OPENRLHF_ROOT_PATH>
 MOUNT="$OPENRLHF_PATH:/openrlhf,$HOME/.cache:/root/.cache"
-IMAGE_NAME="nvcr.io/nvidia/pytorch:26.03-py3"
+# An image built from dockerfile/Dockerfile, in a registry the cluster can pull from
+IMAGE_NAME="<OPENRLHF_IMAGE>"
 RAY_VERSION=2.12.0
 
 JOBLOG="$(realpath .)/train_ppo_llama_ray-$SLURM_JOB_ID.log"

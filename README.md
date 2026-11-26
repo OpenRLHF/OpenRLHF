@@ -292,12 +292,13 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 **Recommended**: Use Docker for hassle-free setup
 
 ```bash
-# 1. Launch Docker container
-docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:26.03-py3 bash
+# 1. Build the image (CUDA 13.0, vLLM 0.34.0, DeepSpeed, FlashAttention)
+git clone https://github.com/OpenRLHF/OpenRLHF.git && cd OpenRLHF
+docker build -t openrlhf dockerfile
 
-# 2. Clean conflicting packages
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
+# 2. Launch Docker container
+docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
+  -v $PWD:/openrlhf openrlhf bash
 
 # 3. Install OpenRLHF (choose one)
 pip install openrlhf                    # Basic
