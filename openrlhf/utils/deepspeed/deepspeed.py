@@ -580,6 +580,13 @@ class DeepspeedStrategy(ABC):
             # save config
             output_config_file = os.path.join(output_dir, "config.json")
             model_to_save.config.to_json_file(output_config_file)
+            # A vision-language checkpoint also needs its processor to load on its own. It goes
+            # first, so the tokenizer files that end up in the checkpoint are the ones training used.
+            if hasattr(model_to_save.config, "vision_config") and not hasattr(tokenizer, "image_processor"):
+                processor = transformers.AutoProcessor.from_pretrained(
+                    model_to_save.config.name_or_path, trust_remote_code=True
+                )
+                processor.save_pretrained(output_dir)
             # save tokenizer
             tokenizer.save_pretrained(output_dir)
 

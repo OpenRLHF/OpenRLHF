@@ -155,3 +155,27 @@ def test_save_model_genuine_mismatch_still_raises(ds_module):
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(AssertionError, match="q_proj.weight"):
             strategy.save_model(model, _tokenizer(), tmp)
+
+
+def test_save_model_vision_language_saves_the_processor(ds_module, monkeypatch):
+    """A vision-language checkpoint carries its processor, and the training tokenizer is written last."""
+    model = _TinyModel()
+    model.save_pretrained = lambda *a, **k: None
+    model.config.vision_config = object()
+    model.config.name_or_path = "base-model"
+
+    saved = []
+    processor = SimpleNamespace(save_pretrained=lambda *a, **k: saved.append("processor"))
+    tokenizer = SimpleNamespace(save_pretrained=lambda *a, **k: saved.append("tokenizer"))
+    loaded_from = []
+    monkeypatch.setattr(
+        ds_module.transformers.AutoProcessor,
+        "from_pretrained",
+        lambda path, **kwargs: loaded_from.append(path) or processor,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _strategy(ds_module, zero_stage=2).save_model(model, tokenizer, tmp)
+
+    assert loaded_from == ["base-model"]
+    assert saved == ["processor", "tokenizer"]
