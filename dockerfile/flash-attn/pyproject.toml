@@ -1,4 +1,0 @@
-[build-system]
-# torch must be the version vLLM pins (setup.py): the extension only loads with the PyTorch it was built for.
-requires = ["setuptools", "wheel", "packaging", "psutil", "ninja", "torch==2.14.0"]
-build-backend = "setuptools.build_meta"

@@ -18,7 +18,6 @@ openrlhf.cli.train_sft \
     --train.max_epochs 1 \
     --ds.param_dtype bf16 \
     --model.gradient_checkpointing_enable \
-    --ds.attn_implementation flash_attention_2 \
     --adam.lr 5e-6 \
     --ds.lora.rank 64 \
     --ds.lora.alpha 64 \

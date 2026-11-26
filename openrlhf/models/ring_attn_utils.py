@@ -1,7 +1,6 @@
 import torch
 import torch.distributed as dist
-from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-from flash_attn.utils.distributed import all_gather
+from transformers.modeling_flash_attention_utils import _index_first_axis, _pad_input, _unpad_input
 
 RING_ATTN_GROUP = None
 
@@ -143,17 +142,11 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
         tuple: Processed sequences and related tensors for ring attention
     """
     rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-    sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
+    sequences, indices, cu_seqlens, _, _ = _unpad_input(sequences.unsqueeze(-1), attention_mask)
     sequences = sequences.transpose(0, 1)  # (1, total_seqs)
-    rolled_sequences = index_first_axis(
-        rearrange(rolled_sequences.unsqueeze(-1), "b s ... -> (b s) ..."), indices
-    ).transpose(
-        0, 1
-    )  # (1, total_seqs)
+    rolled_sequences = _index_first_axis(rolled_sequences.unsqueeze(-1), indices).transpose(0, 1)  # (1, total_seqs)
     position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
-    position_ids = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(
-        0, 1
-    )  # (1, total_seqs)
+    position_ids = _index_first_axis(position_ids.unsqueeze(-1), indices).transpose(0, 1)  # (1, total_seqs)
     ring_attn_pad_len = 0
     if ring_attn_group is not None:
         (sequences, position_ids, rolled_sequences), ring_attn_pad_len = get_tensor_in_current_ring_attn_rank(
@@ -191,8 +184,10 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
         Padded tensor
     """
     if ring_attn_group is not None:
+        from flash_attn.utils.distributed import all_gather  # RingAttention runs on FlashAttention 2
+
         tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
         if ring_attn_pad_len > 0:
             tensor = tensor[:, :-ring_attn_pad_len]
-    tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+    tensor = _pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
     return tensor

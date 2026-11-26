@@ -297,27 +297,25 @@ docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
   -v $PWD:/openrlhf nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 bash
 
 # 2. Install Python
-apt-get update && apt-get install -y python3-dev python3-pip python-is-python3 git
+apt-get update && apt-get install -y python3-dev python3-pip python-is-python3
 export PIP_BREAK_SYSTEM_PACKAGES=1 CUDA_HOME=/usr/local/cuda
 pip install --ignore-installed pip setuptools wheel
 
-# 3. Install OpenRLHF (choose one). pip compiles FlashAttention on the way, about 25 minutes:
-#    its release on PyPI does not build against PyTorch 2.14, the build in this repository does.
-FLASH_ATTN="flash-attn @ git+https://github.com/OpenRLHF/OpenRLHF.git#subdirectory=dockerfile/flash-attn"
-pip install openrlhf "$FLASH_ATTN"                    # Basic
-pip install openrlhf[vllm] "$FLASH_ATTN"              # + vLLM 0.34.0 (recommended)
-pip install openrlhf[vllm_latest] "$FLASH_ATTN"       # + Latest vLLM
-pip install openrlhf[vllm,ring,liger] "$FLASH_ATTN"   # + All optimizations
+# 3. Install OpenRLHF (choose one)
+pip install openrlhf                    # Basic
+pip install openrlhf[vllm]              # + vLLM 0.34.0 (recommended)
+pip install openrlhf[vllm_latest]       # + Latest vLLM
+pip install openrlhf[vllm,ring,liger]   # + All optimizations
 ```
 
-On a cluster, the [Dockerfile](./dockerfile/Dockerfile) builds this environment as an image: `docker build -t openrlhf dockerfile`.
+This installs FlashAttention 4, which needs a Hopper or newer GPU (H100, H200, B200). For older GPUs such as A100, for RingAttention and for clusters, the [Dockerfile](./dockerfile/Dockerfile) builds an image with FlashAttention 2: `docker build -t openrlhf dockerfile`.
 
 **Alternative: Install from source**
 
 ```bash
 git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
-pip install -e . ./dockerfile/flash-attn
+pip install -e .
 ```
 
 > [!TIP]

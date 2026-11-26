@@ -13,7 +13,7 @@ from openrlhf.trainer.ray.launcher import (
 )
 from openrlhf.trainer.ray.ppo_actor import PolicyModelActor
 from openrlhf.trainer.ray.ppo_critic import CriticModelActor
-from openrlhf.utils import get_strategy
+from openrlhf.utils import default_attn_implementation, get_strategy
 
 
 def train(args):
@@ -340,8 +340,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ds.attn_implementation",
         type=str,
-        default="flash_attention_2",
-        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
+        default=default_attn_implementation(),
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_4, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument(
         "--ds.experts_implementation",
@@ -699,7 +699,7 @@ if __name__ == "__main__":
             print(
                 "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
             )
-            args.ds.attn_implementation = "flash_attention_2"
+            args.ds.attn_implementation = default_attn_implementation()
         assert args.vllm.num_engines > 0, "Only support `--packing_samples` with vLLM."
 
     if args.vllm.enable_sleep and not args.train.colocate_all:

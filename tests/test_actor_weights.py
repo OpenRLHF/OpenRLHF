@@ -5,7 +5,7 @@ import types
 import pytest
 import torch
 
-for _module in ("deepspeed", "flash_attn", "ray", "vllm"):
+for _module in ("deepspeed", "ray", "vllm"):
     pytest.importorskip(_module)
 
 from openrlhf.trainer.ray.ppo_actor import ActorWeights

@@ -1,3 +1,4 @@
+import importlib.util
 from typing import List
 
 import torch
@@ -35,6 +36,11 @@ def get_strategy(args):
         args=args,
     )
     return strategy
+
+
+def default_attn_implementation() -> str:
+    """FlashAttention 2 where it is built, else FlashAttention 4, which pip installs without a compiler."""
+    return "flash_attention_2" if importlib.util.find_spec("flash_attn_2_cuda") else "flash_attention_4"
 
 
 def is_vlm_model(pretrain: str) -> bool:

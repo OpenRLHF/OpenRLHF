@@ -17,7 +17,6 @@ openrlhf.cli.train_sft \
    --ds.zero_stage 2 \
    --train.max_epochs 1 \
    --ds.param_dtype bf16 \
-   --ds.attn_implementation flash_attention_2 \
    --adam.lr 5e-6 \
    --ckpt.load_enable \
    --ds.packing_samples \
