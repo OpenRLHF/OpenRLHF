@@ -480,7 +480,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
    --ds.packing_samples \
-   --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \
@@ -746,7 +745,6 @@ python -m openrlhf.cli.lora_combiner \
 
 1. **生成阶段**：最大化 `--rollout.micro_batch_size`，最小化 vLLM TP 大小
 2. **训练阶段**：最大化 `--train.micro_batch_size`，启用 `--ds.packing_samples`
-3. **vLLM**：始终使用 `--vllm.sync_backend nccl`
 
 > [!TIP]
 > **快速开始模板**：对于 8x A100（80GB），尝试混合引擎 + `--vllm.gpu_memory_utilization 0.5` + `--train.colocate_all`

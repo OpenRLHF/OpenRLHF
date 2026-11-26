@@ -71,7 +71,6 @@ ENGINE_ARGS=(
    --vllm.gpu_memory_utilization 0.95
    --train.colocate_all
    --ds.enable_sleep
-   --vllm.sync_backend nccl
    --vllm.enforce_eager
 
    --ds.zero_stage 3

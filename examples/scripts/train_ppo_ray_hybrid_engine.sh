@@ -35,7 +35,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
    --ds.packing_samples \
-   --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \

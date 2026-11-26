@@ -483,7 +483,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
    --ds.packing_samples \
-   --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \
@@ -765,7 +764,6 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 1. **Generation Phase**: Maximize `--rollout.micro_batch_size`, minimize vLLM TP size
 2. **Training Phase**: Maximize `--train.micro_batch_size`, enable `--ds.packing_samples`
-3. **vLLM**: Always use `--vllm.sync_backend nccl`
 
 > [!TIP]
 > **Quick Start Template**: For 8x A100 (80GB), try Hybrid Engine + `--vllm.gpu_memory_utilization 0.5` + `--train.colocate_all`

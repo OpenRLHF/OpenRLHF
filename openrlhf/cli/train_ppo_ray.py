@@ -237,13 +237,6 @@ if __name__ == "__main__":
         default=1,
         help="tensor parallel size of vLLM Engine for multi-GPU inference",
     )
-    parser.add_argument(
-        "--vllm.sync_backend",
-        type=str,
-        default="nccl",
-        choices=["nccl"],
-        help="DeepSpeed -> vLLM weight sync backend (CUDA IPC takes its place with --train.colocate_all)",
-    )
     parser.add_argument("--vllm.enable_prefix_caching", action="store_true", default=False)
     parser.add_argument("--vllm.enforce_eager", action="store_true", default=False, help="Disable CUDA graph in vLLM")
     parser.add_argument(

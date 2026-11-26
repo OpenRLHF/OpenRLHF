@@ -89,7 +89,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --reward.normalize_enable \
     --ds.adam_offload \
     --ds.packing_samples \
-    --vllm.sync_backend nccl \
     --actor.gradient_checkpointing_enable \
     --logger.wandb.key {wandb_token}" &>> ${JOBLOG}
 

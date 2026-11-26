@@ -69,7 +69,6 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --data.apply_chat_template \
    --actor.gradient_checkpointing_enable \
    --ds.packing_samples \
-   --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \
