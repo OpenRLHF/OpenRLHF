@@ -11,7 +11,11 @@ from openrlhf.trainer.ppo_utils.experience import Experience
 from openrlhf.trainer.ppo_utils.length_penalty import apply_length_penalties
 from openrlhf.trainer.ray.launcher import RayActorGroup
 from openrlhf.utils.logging_utils import init_logger
-from openrlhf.utils.seqlen_balancing import get_minimum_num_micro_batch_size, get_seqlen_balanced_partitions
+from openrlhf.utils.seqlen_balancing import (
+    ceildiv,
+    get_minimum_num_micro_batch_size,
+    get_seqlen_balanced_partitions,
+)
 
 logger = init_logger(__name__)
 
@@ -46,14 +50,14 @@ class RemoteExperienceMaker:
             sample.index = [i]
 
         samples_list = []
+        effective_actor_num = (
+            self.args.actor.num_nodes
+            * self.args.actor.num_gpus_per_node
+            // self.args.ds.ring_attn_size
+            // self.args.ds.tensor_parallel_size
+        )
         if self.args.train.dynamic_batch_enable:
             total_lengths = [int(s.total_length.item()) for s in rollout_samples]
-            effective_actor_num = (
-                self.args.actor.num_nodes
-                * self.args.actor.num_gpus_per_node
-                // self.args.ds.ring_attn_size
-                // self.args.ds.tensor_parallel_size
-            )
             minimum_batch_num = get_minimum_num_micro_batch_size(
                 total_lengths,
                 self.args.rollout.max_tokens_per_gpu,
@@ -68,10 +72,16 @@ class RemoteExperienceMaker:
                 concat_samples = Experience.concat_experiences(micro_batch, self.tokenizer.pad_token_id)
                 samples_list.append(concat_samples)
         else:
-            batch_size = self.args.rollout.micro_batch_size
-            for i in range(0, len(rollout_samples), batch_size):
+            # ZeRO-3 gathers parameters collectively, so every DP rank must run the same number
+            # of forwards. Round a short (terminal) rollout up to a multiple of the actor count;
+            # otherwise the last ranks get fewer micro-batches and the others block forever.
+            num_samples = len(rollout_samples)
+            num_batch = ceildiv(ceildiv(num_samples, self.args.rollout.micro_batch_size), effective_actor_num)
+            num_batch = max(min(num_batch, num_samples // effective_actor_num) * effective_actor_num, 1)
+            for i in range(num_batch):
                 concat_samples = Experience.concat_experiences(
-                    rollout_samples[i : i + batch_size], self.tokenizer.pad_token_id
+                    rollout_samples[num_samples * i // num_batch : num_samples * (i + 1) // num_batch],
+                    self.tokenizer.pad_token_id,
                 )
                 samples_list.append(concat_samples)
         return samples_list
