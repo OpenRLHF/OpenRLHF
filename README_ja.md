@@ -286,20 +286,29 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 **推奨**：手間のかからないセットアップのためにDockerを使用
 
 ```bash
-# 1. イメージをビルド（CUDA 13.0、vLLM 0.34.0、DeepSpeed、FlashAttention）
-git clone https://github.com/OpenRLHF/OpenRLHF.git && cd OpenRLHF
-docker build -t openrlhf dockerfile
-
-# 2. Dockerコンテナを起動
+# 1. Dockerコンテナを起動
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf openrlhf bash
+  -v $PWD:/openrlhf nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 bash
 
-# 3. OpenRLHFをインストール（1つ選択）
+# 2. Pythonとビルドツールをインストール
+apt-get update && apt-get install -y python3-dev python3-pip python-is-python3 git build-essential
+export PIP_BREAK_SYSTEM_PACKAGES=1 CUDA_HOME=/usr/local/cuda
+pip install --ignore-installed pip setuptools wheel
+
+# 3. vLLMをインストールし、そのPyTorchに対してFlashAttentionをビルド（約20分）
+pip install vllm==0.34.0
+git clone --depth 1 --branch v2.8.3 https://github.com/Dao-AILab/flash-attention.git /tmp/flash-attention
+sed -i 's/-std=c++17/-std=c++20/g' /tmp/flash-attention/setup.py  # PyTorch 2.14のヘッダーはC++20が必要
+FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=8 pip install --no-build-isolation --no-deps /tmp/flash-attention
+
+# 4. OpenRLHFをインストール（1つ選択）
 pip install openrlhf                    # 基本
 pip install openrlhf[vllm]              # + vLLM 0.34.0（推奨）
 pip install openrlhf[vllm_latest]       # + 最新vLLM
 pip install openrlhf[vllm,ring,liger]   # + すべての最適化
 ```
+
+[Dockerfile](./dockerfile/Dockerfile)は同じ環境をイメージとしてビルドします：`docker build -t openrlhf dockerfile`。
 
 **代替：ソースからインストール**
 
