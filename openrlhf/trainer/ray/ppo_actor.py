@@ -1,3 +1,4 @@
+import math
 import os
 from abc import ABC
 from dataclasses import fields
@@ -150,23 +151,25 @@ class ActorPPOTrainer(ABC):
         """
         args = self.strategy.args
         rank = torch.distributed.get_rank()
+        source = ActorWeights(self.actor, args.ds)
         # 512 MiB chunks: both sides hold a buffer per chunk next to the model, and vLLM's
         # default of 1 GiB is too much headroom at a high gpu_memory_utilization.
-        chunks = dict(packed=True, packed_buffer_size_bytes=512 * 1024**2)
+        chunk_bytes = 512 * 1024**2
         if args.train.colocate_all and not args.train.async_enable:
-            init_info = IPCTrainerInitInfo(rank=rank, **chunks)
+            # A CUDA IPC chunk is one buffer of fixed size, so it must also hold the largest tensor.
+            largest = max(math.prod(meta.shape) * meta.dtype.itemsize for meta in source.metadata)
+            init_info = IPCTrainerInitInfo(rank=rank, packed=True, packed_buffer_size_bytes=max(chunk_bytes, largest))
         else:
             init_info = NCCLTrainerInitInfo(
                 master_address=ray.util.get_node_ip_address(),
                 master_port=get_open_port(),
                 world_size=1 + args.vllm.num_engines * args.vllm.tensor_parallel_size,
                 rank=rank,
-                **chunks,
+                packed=True,
+                packed_buffer_size_bytes=chunk_bytes,
             )
         self._weight_transfer = WeightTransferTrainerFactory.trainer_init(
-            init_info=init_info,
-            client=RayVLLMWeightSyncClient(self.vllm_engines),
-            source=ActorWeights(self.actor, args.ds),
+            init_info=init_info, client=RayVLLMWeightSyncClient(self.vllm_engines), source=source
         )
 
     def ppo_train(self, kl_ctl: float):
