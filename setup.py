@@ -74,14 +74,13 @@ setup(
     long_description_content_type="text/markdown",
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={
-        "vllm": ["vllm==0.29.0"],
-        "vllm_latest": ["vllm>=0.29.0"],
+        "vllm": ["vllm==0.34.0"],
+        "vllm_latest": ["vllm>=0.34.0"],
         "ring": ["ring_flash_attn"],
         "liger": ["liger_kernel"],
     },
-    python_requires=">=3.10",
+    python_requires=">=3.11",
     classifiers=[
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Environment :: GPU :: NVIDIA CUDA",

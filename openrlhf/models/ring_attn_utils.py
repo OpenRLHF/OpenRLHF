@@ -20,6 +20,22 @@ def patch_transformers_for_ring_flash_attn():
         _m.is_flash_attn_greater_or_equal_2_10 = is_flash_attn_greater_or_equal_2_10
 
 
+def substitute_hf_flash_attn(group, heads_k_stride):
+    """Run transformers' flash attention as ring attention over `group`.
+
+    ring_flash_attn<=0.1.8's own substitute_hf_flash_attn picks its replacement by the parameter
+    count of transformers' _flash_attention_forward and rejects a count it does not know, such as
+    that of transformers 5.22. Its newest replacement takes **kwargs, so install that one directly.
+    """
+    patch_transformers_for_ring_flash_attn()
+    import transformers.modeling_flash_attention_utils as hf_flash_attn
+    from ring_flash_attn.adapters import hf_adapter
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+    hf_flash_attn._flash_attention_forward = hf_adapter.create_ring_flash_attention_forward(group, heads_k_stride)[-1]
+    ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = hf_adapter.flash_attention_forward
+
+
 def set_ring_attn_group(group):
     global RING_ATTN_GROUP
     RING_ATTN_GROUP = group

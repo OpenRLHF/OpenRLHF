@@ -22,7 +22,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers.trainer import get_scheduler
 
 from openrlhf.models import Actor
-from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group
+from openrlhf.models.ring_attn_utils import get_ring_attn_group, set_ring_attn_group, substitute_hf_flash_attn
 from openrlhf.utils.distributed_sampler import DistributedSampler
 from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 
@@ -124,11 +124,6 @@ class DeepspeedStrategy(ABC):
         group = ds_device_mesh["sp"].get_group()
         self.ring_attn_rank = dist.get_rank(group=group)
         set_ring_attn_group(group)
-
-        from openrlhf.models.ring_attn_utils import patch_transformers_for_ring_flash_attn
-
-        patch_transformers_for_ring_flash_attn()
-        from ring_flash_attn import substitute_hf_flash_attn
 
         self.ring_head_stride = getattr(self.args.ds, "ring_attn_head_stride", 1)
         substitute_hf_flash_attn(self.ring_attn_group, self.ring_head_stride)
