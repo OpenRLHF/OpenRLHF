@@ -184,7 +184,7 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
         Padded tensor
     """
     if ring_attn_group is not None:
-        from flash_attn.utils.distributed import all_gather  # RingAttention runs on FlashAttention 2
+        from flash_attn.utils.distributed import all_gather  # only RingAttention needs the flash-attn package
 
         tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
         if ring_attn_pad_len > 0:

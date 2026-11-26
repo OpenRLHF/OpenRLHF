@@ -302,7 +302,7 @@ pip install openrlhf[vllm_latest]       # + 最新vLLM
 pip install openrlhf[vllm,ring,liger]   # + すべての最適化
 ```
 
-これでインストールされるのはFlashAttention 4で、Hopper以降のGPU（H100、H200、B200）が必要です。A100などの古いGPU、RingAttention、クラスター環境では、[Dockerfile](./dockerfile/Dockerfile)でFlashAttention 2入りのイメージをビルドできます：`docker build -t openrlhf dockerfile`。
+FlashAttention 2はビルド済みカーネルとして提供され、transformersが初回使用時にHugging Face Hubからダウンロードするため（約1 GB）、コンパイルは不要です。RingAttention、およびインターネットに接続できないクラスターではFlashAttention 2パッケージ自体が必要です。[Dockerfile](./dockerfile/Dockerfile)でそれを含むイメージをビルドできます：`docker build -t openrlhf dockerfile`。
 
 **代替：ソースからインストール**
 

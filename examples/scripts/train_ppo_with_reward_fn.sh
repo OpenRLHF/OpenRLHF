@@ -42,6 +42,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward.normalize_enable \
    --ds.packing_samples \
    --ds.adam_offload \
+   --ds.attn_implementation flash_attention_2 \
    --actor.gradient_checkpointing_enable \
    --logger.wandb.key {wandb_token}
 

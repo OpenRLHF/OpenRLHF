@@ -30,9 +30,10 @@ RUN apt-get -y install build-essential git ca-certificates cuda-compat-13-0 pyth
 RUN pip install --ignore-installed pip setuptools wheel
 # Keep the training and rollout stacks on one resolver-selected PyTorch/CUDA ABI.
 RUN pip install vllm==0.34.0 deepspeed==0.20.1 transformers==5.22.2
-# Build FlashAttention 2 after vLLM has installed its exact PyTorch dependency, so the
-# extension uses the same ABI. PyTorch 2.14 headers need C++20, while flash-attn still
-# passes -std=c++17. It serves every GPU; pip alone gets FlashAttention 4, for Hopper and newer.
+# Build the FlashAttention 2 package after vLLM has installed its exact PyTorch dependency,
+# so the extension uses the same ABI; PyTorch 2.14 headers need C++20, while flash-attn still
+# passes -std=c++17. pip alone gets FlashAttention 2 as a prebuilt Hub kernel; the package
+# is here for RingAttention and for nodes without internet access.
 RUN git clone --depth 1 --branch v2.8.3.post2 https://github.com/Dao-AILab/flash-attention.git /tmp/flash-attention && \
     sed -i 's/-std=c++17/-std=c++20/g' /tmp/flash-attention/setup.py && \
     FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=8 pip install --no-build-isolation --no-deps /tmp/flash-attention && \

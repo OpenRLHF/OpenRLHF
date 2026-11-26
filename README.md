@@ -308,7 +308,7 @@ pip install openrlhf[vllm_latest]       # + Latest vLLM
 pip install openrlhf[vllm,ring,liger]   # + All optimizations
 ```
 
-This installs FlashAttention 4, which needs a Hopper or newer GPU (H100, H200, B200). For older GPUs such as A100, for RingAttention and for clusters, the [Dockerfile](./dockerfile/Dockerfile) builds an image with FlashAttention 2: `docker build -t openrlhf dockerfile`.
+FlashAttention 2 comes as a prebuilt kernel that transformers downloads from the Hugging Face Hub on first use (about 1 GB), so nothing is compiled. RingAttention, and clusters without internet access, need the FlashAttention 2 package itself: the [Dockerfile](./dockerfile/Dockerfile) builds an image with it, `docker build -t openrlhf dockerfile`.
 
 **Alternative: Install from source**
 

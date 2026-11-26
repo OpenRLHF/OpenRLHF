@@ -75,9 +75,7 @@ setup(
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={
         "vllm": ["vllm==0.34.0"],
-        # The upper bound makes pip settle vLLM, and the exact kernel-library versions it pins,
-        # before it picks versions of them for FlashAttention 4; without it the resolver gives up.
-        "vllm_latest": ["vllm>=0.34.0,<1"],
+        "vllm_latest": ["vllm>=0.34.0"],
         "ring": ["ring_flash_attn"],
         "liger": ["liger_kernel"],
     },

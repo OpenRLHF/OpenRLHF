@@ -18,6 +18,7 @@ openrlhf.cli.train_rm \
    --data.apply_chat_template \
    --data.chosen_key chosen \
    --data.rejected_key rejected \
+   --ds.attn_implementation flash_attention_2 \
    --ckpt.load_enable \
    --ds.packing_samples \
    --model.gradient_checkpointing_enable

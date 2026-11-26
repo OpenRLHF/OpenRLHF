@@ -4,7 +4,6 @@ bitsandbytes
 datasets
 deepspeed==0.20.1
 einops
-flash-attn-4==4.0.0b41
 grpcio>=1.74.0
 huggingface_hub>=2.0.0
 isort
@@ -23,7 +22,7 @@ torch
 torchdata
 torchmetrics
 tqdm
-transformers==5.22.2
+transformers[kernels]==5.22.2
 transformers_stream_generator
 wandb
 wheel

@@ -7,7 +7,7 @@ from openrlhf.datasets import RewardDataset
 from openrlhf.datasets.utils import blending_datasets
 from openrlhf.models import get_llm_for_sequence_regression
 from openrlhf.trainer.rm_trainer import RewardModelTrainer
-from openrlhf.utils import default_attn_implementation, get_strategy, get_tokenizer
+from openrlhf.utils import get_strategy, get_tokenizer
 
 
 def train(args):
@@ -198,8 +198,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ds.attn_implementation",
         type=str,
-        default=default_attn_implementation(),
-        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_4, kernels-community/vllm-flash-attn3)",
+        default="flash_attention_2",
+        help="Attention implementation (e.g., eager, flash_attention_2, flash_attention_3, kernels-community/vllm-flash-attn3)",
     )
     parser.add_argument(
         "--ds.experts_implementation",
@@ -337,7 +337,7 @@ if __name__ == "__main__":
         print(
             "[Warning] Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
         )
-        args.ds.attn_implementation = default_attn_implementation()
+        args.ds.attn_implementation = "flash_attention_2"
 
     if args.use_ms:
         from modelscope.utils.hf_util import patch_hub
