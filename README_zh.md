@@ -302,7 +302,7 @@ pip install --ignore-installed pip setuptools wheel
 
 # 3. 安装 vLLM，然后针对它的 PyTorch 编译 FlashAttention（约 20 分钟）
 pip install vllm==0.34.0
-git clone --depth 1 --branch v2.8.3 https://github.com/Dao-AILab/flash-attention.git /tmp/flash-attention
+git clone --depth 1 --branch v2.8.3.post2 https://github.com/Dao-AILab/flash-attention.git /tmp/flash-attention
 sed -i 's/-std=c++17/-std=c++20/g' /tmp/flash-attention/setup.py  # PyTorch 2.14 的头文件需要 C++20
 FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=8 pip install --no-build-isolation --no-deps /tmp/flash-attention
 
