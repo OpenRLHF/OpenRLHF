@@ -290,32 +290,28 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
   -v $PWD:/openrlhf nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 bash
 
-# 2. Pythonとビルドツールをインストール
-apt-get update && apt-get install -y python3-dev python3-pip python-is-python3 git build-essential
+# 2. Pythonをインストール
+apt-get update && apt-get install -y python3-dev python3-pip python-is-python3 git
 export PIP_BREAK_SYSTEM_PACKAGES=1 CUDA_HOME=/usr/local/cuda
 pip install --ignore-installed pip setuptools wheel
 
-# 3. vLLMをインストールし、そのPyTorchに対してFlashAttentionをビルド（約20分）
-pip install vllm==0.34.0
-git clone --depth 1 --branch v2.8.3.post2 https://github.com/Dao-AILab/flash-attention.git /tmp/flash-attention
-sed -i 's/-std=c++17/-std=c++20/g' /tmp/flash-attention/setup.py  # PyTorch 2.14のヘッダーはC++20が必要
-FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=8 pip install --no-build-isolation --no-deps /tmp/flash-attention
-
-# 4. OpenRLHFをインストール（1つ選択）
-pip install openrlhf                    # 基本
-pip install openrlhf[vllm]              # + vLLM 0.34.0（推奨）
-pip install openrlhf[vllm_latest]       # + 最新vLLM
-pip install openrlhf[vllm,ring,liger]   # + すべての最適化
+# 3. OpenRLHFをインストール（1つ選択）。pipが途中でFlashAttentionをコンパイルします（約25分）：
+#    PyPIのリリースはPyTorch 2.14に対してビルドできず、このリポジトリのビルドなら可能です。
+FLASH_ATTN="flash-attn @ git+https://github.com/OpenRLHF/OpenRLHF.git#subdirectory=dockerfile/flash-attn"
+pip install openrlhf "$FLASH_ATTN"                    # 基本
+pip install openrlhf[vllm] "$FLASH_ATTN"              # + vLLM 0.34.0（推奨）
+pip install openrlhf[vllm_latest] "$FLASH_ATTN"       # + 最新vLLM
+pip install openrlhf[vllm,ring,liger] "$FLASH_ATTN"   # + すべての最適化
 ```
 
-[Dockerfile](./dockerfile/Dockerfile)は同じ環境をイメージとしてビルドします：`docker build -t openrlhf dockerfile`。
+クラスターでは、[Dockerfile](./dockerfile/Dockerfile)でこの環境をイメージとしてビルドできます：`docker build -t openrlhf dockerfile`。
 
 **代替：ソースからインストール**
 
 ```bash
 git clone https://github.com/OpenRLHF/OpenRLHF.git
 cd OpenRLHF
-pip install -e .
+pip install -e . ./dockerfile/flash-attn
 ```
 
 > [!TIP]
