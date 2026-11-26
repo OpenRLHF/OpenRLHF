@@ -22,7 +22,10 @@ RUN sudo su -
 
 RUN apt install -y tzdata
 
-RUN apt-get -y install build-essential git ca-certificates python3-dev python3-pip python-is-python3 libopenexr-dev libxi-dev libglfw3-dev libglew-dev libomp-dev libxinerama-dev libxcursor-dev gdb
+# cuda-compat-13-0 is CUDA forward compatibility: a userspace libcuda that lets this CUDA 13
+# stack run on data center hosts whose NVIDIA driver is older than 580. It lives in
+# /usr/local/cuda/compat, off the loader path; docker-entrypoint.sh adds it only when needed.
+RUN apt-get -y install build-essential git ca-certificates cuda-compat-13-0 python3-dev python3-pip python-is-python3 libopenexr-dev libxi-dev libglfw3-dev libglew-dev libomp-dev libxinerama-dev libxcursor-dev gdb
 # Debian's pip, setuptools and wheel cannot be upgraded in place, so current ones are layered over them.
 RUN pip install --ignore-installed pip setuptools wheel
 # Keep the training and rollout stacks on one resolver-selected PyTorch/CUDA ABI.
@@ -34,12 +37,6 @@ RUN git clone --depth 1 --branch v2.8.3.post2 https://github.com/Dao-AILab/flash
     sed -i 's/-std=c++17/-std=c++20/g' /tmp/flash-attention/setup.py && \
     FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=8 pip install --no-build-isolation --no-deps /tmp/flash-attention && \
     rm -rf /tmp/flash-attention
-
-# CUDA forward compatibility: a userspace libcuda that lets this CUDA 13 stack run on data
-# center hosts whose NVIDIA driver is older than 580. It lands in /usr/local/cuda/compat,
-# off the loader path; docker-entrypoint.sh adds it only when the host driver needs it.
-RUN apt-get update && apt-get install -y --no-install-recommends cuda-compat-13-0 && \
-    rm -rf /var/lib/apt/lists/*
 
 # Fail the build, not a user's first run, when the installed stack does not import.
 RUN python -c "import torch, vllm, deepspeed, transformers, flash_attn"
