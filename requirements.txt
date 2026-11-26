@@ -6,7 +6,7 @@ deepspeed==0.20.1
 einops
 flash-attn==2.8.3
 grpcio>=1.74.0
-huggingface_hub>=1.0.0
+huggingface_hub>=2.0.0
 isort
 jsonlines
 loralib
