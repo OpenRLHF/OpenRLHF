@@ -551,22 +551,24 @@ class DeepspeedStrategy(ABC):
             output_state_dict = clone_tensors_for_torch_save(model_to_save.state_dict())
 
         if self.is_rank_0():
-            state_dict_keys = set(model_to_save.state_dict().keys())
-            output_state_dict_keys = set(output_state_dict.keys())
+            # PEFT saves adapter weights below, so quantization buffers and
+            # other base-model state absent from ZeRO's consolidated dict are
+            # irrelevant to the adapter checkpoint.
+            if not isinstance(model_to_save, PeftModel):
+                state_dict_keys = set(model_to_save.state_dict().keys())
+                output_state_dict_keys = set(output_state_dict.keys())
 
-            # corner case for tie_word_embeddings, such as Qwen2-0.5B: ZeRO-3's
-            # consolidated state dict omits the tied lm_head weight (it shares
-            # storage with the embedding). PEFT prefixes every key with
-            # "base_model.model.", so a LoRA-wrapped save always tripped this
-            # assertion (#747) unless we match the key by suffix.
-            if getattr(model_to_save.config, "tie_word_embeddings", False):
-                state_dict_keys -= {
-                    k for k in state_dict_keys if k == "lm_head.weight" or k.endswith(".lm_head.weight")
-                }
+                # corner case for tie_word_embeddings, such as Qwen2-0.5B: ZeRO-3's
+                # consolidated state dict omits the tied lm_head weight (it shares
+                # storage with the embedding).
+                if getattr(model_to_save.config, "tie_word_embeddings", False):
+                    state_dict_keys -= {
+                        k for k in state_dict_keys if k == "lm_head.weight" or k.endswith(".lm_head.weight")
+                    }
 
-            assert state_dict_keys.issubset(
-                output_state_dict_keys
-            ), f"mismatch keys {output_state_dict_keys.symmetric_difference(state_dict_keys)}"
+                assert state_dict_keys.issubset(
+                    output_state_dict_keys
+                ), f"mismatch keys {output_state_dict_keys.symmetric_difference(state_dict_keys)}"
 
             # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
             if isinstance(model_to_save, PeftModel):
