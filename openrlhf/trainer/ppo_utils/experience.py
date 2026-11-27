@@ -103,13 +103,15 @@ class Experience:
     def _merge_item(items: List, pad_value: int = 0) -> Union[torch.Tensor, list, dict, Any]:
         """Merge a list of items into a single item.
         Recursively merge tensors, lists and dicts.
-        For tensors, use zero_pad_sequences to merge sequences of different lengths.
+        Concatenate per-sample vectors directly; pad only tensors with a sequence dimension.
 
         Args:
             items: List of items to merge
             pad_value: Value used for padding tensors
         """
         if isinstance(items[0], torch.Tensor):
+            if items[0].ndim == 1:
+                return torch.cat(items, dim=0)
             return zero_pad_sequences(items, side="right", value=pad_value)
         elif isinstance(items[0], list):
             return list(itertools.chain.from_iterable(items))
