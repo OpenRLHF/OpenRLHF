@@ -308,11 +308,9 @@ def split_tuple(expr: str) -> list[str]:
 
 
 def last_boxed_only_string(string: str) -> str | None:
-    idx = string.rfind("\\boxed")
+    idx = max(string.rfind("\\boxed"), string.rfind("\\fbox"))
     if idx < 0:
-        idx = string.rfind("\\fbox")
-        if idx < 0:
-            return None
+        return None
     i = idx
     right_brace_idx = None
     num_left_braces_open = 0
