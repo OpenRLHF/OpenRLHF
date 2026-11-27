@@ -73,8 +73,18 @@ class GenerateSamplesActor:
     def get_max_steps(self):
         return self.max_steps
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict, generator_state=None):
+        """Restore prompt dataloader cursor and (optionally) oversampling buffer.
+
+        ``generator_state`` mirrors what the sync path persists in
+        ``PPOTrainer.fit`` — the buffered-but-untrained rollouts that must
+        survive a checkpoint/resume cycle.  Without it, any rollouts queued
+        but not yet consumed by the trainer at checkpoint time are silently
+        dropped on resume.
+        """
         self.prompts_dataloader.load_state_dict(state_dict)
+        if generator_state is not None and hasattr(self.samples_generator, "load_state_dict"):
+            self.samples_generator.load_state_dict(generator_state)
 
     def _should_eval(self, global_step):
         return (
@@ -145,6 +155,13 @@ class GenerateSamplesActor:
                         "episode": episode,
                         "total_consumed_prompts": total_consumed_prompts,
                         "data_loader_state_dict": self.prompts_dataloader.state_dict(),
+                        # Sync path saves the oversampling buffer too; async must
+                        # match so buffered rollouts survive checkpoint/resume.
+                        "generator_state": (
+                            self.samples_generator.state_dict()
+                            if hasattr(self.samples_generator, "state_dict")
+                            else None
+                        ),
                     }
                     self.rollout_queue.put(
                         (rollout_samples, client_states, filter_pass_rate, generation_time), block=True
@@ -333,10 +350,15 @@ class PPOTrainerAsync:
         global_step = checkpoint_states["global_step"]
         total_consumed_prompts = checkpoint_states.get("total_consumed_prompts", 0)
         # Keep vLLM weights and dataloader states in sync when resuming.
+        # Also restore the oversampling buffer so the generator resumes at
+        # the exact prompt + buffer boundary — mirroring sync PPOTrainer.
         if global_step > 0:
             ray.get(
                 [
-                    self.generator_actor.load_state_dict.remote(checkpoint_states["data_loader_state_dict"]),
+                    self.generator_actor.load_state_dict.remote(
+                        checkpoint_states["data_loader_state_dict"],
+                        generator_state=checkpoint_states.get("generator_state"),
+                    ),
                     self.trainer_actor.broadcast_to_vllm.remote(),
                 ]
             )
