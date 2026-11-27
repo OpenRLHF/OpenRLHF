@@ -173,6 +173,7 @@ class SFTTrainer(ABC):
                         attention_mask=attention_mask,
                         return_output=True,
                         return_logprobs=True,
+                        return_logits=False,
                         ring_attn_group=self.strategy.ring_attn_group,
                     )
 
