@@ -294,21 +294,16 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 ```bash
 # 1. Launch Docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 bash
+  -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $PWD:/openrlhf pytorch/pytorch:2.14.0-cuda13.0-cudnn9-devel bash
 
-# 2. Install Python
-apt-get update && apt-get install -y python3-dev python3-pip python-is-python3
-export PIP_BREAK_SYSTEM_PACKAGES=1 CUDA_HOME=/usr/local/cuda
-pip install --ignore-installed pip setuptools wheel
-
-# 3. Install OpenRLHF (choose one)
+# 2. Install OpenRLHF (choose one)
 pip install openrlhf                    # Basic
 pip install openrlhf[vllm]              # + vLLM 0.34.0 (recommended)
 pip install openrlhf[vllm_latest]       # + Latest vLLM
 pip install openrlhf[vllm,ring,liger]   # + All optimizations
 ```
 
-FlashAttention 2 comes as a prebuilt kernel that transformers downloads from the Hugging Face Hub on first use (about 1 GB), so nothing is compiled. RingAttention, and clusters without internet access, need the FlashAttention 2 package itself: the [Dockerfile](./dockerfile/Dockerfile) builds an image with it, `docker build -t openrlhf dockerfile`.
+FlashAttention 2 comes as a prebuilt kernel that transformers downloads from the Hugging Face Hub on first use (about 1 GB), so nothing is compiled. RingAttention, clusters without internet access, and hosts whose NVIDIA driver is older than 580 need the image built from the [Dockerfile](./dockerfile/Dockerfile) instead, `docker build -t openrlhf dockerfile`: it carries the FlashAttention 2 package itself and the CUDA forward-compatibility libraries.
 
 **Alternative: Install from source**
 

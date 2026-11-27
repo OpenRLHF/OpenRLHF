@@ -288,21 +288,16 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 ```bash
 # 1. Dockerコンテナを起動
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 bash
+  -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $PWD:/openrlhf pytorch/pytorch:2.14.0-cuda13.0-cudnn9-devel bash
 
-# 2. Pythonをインストール
-apt-get update && apt-get install -y python3-dev python3-pip python-is-python3
-export PIP_BREAK_SYSTEM_PACKAGES=1 CUDA_HOME=/usr/local/cuda
-pip install --ignore-installed pip setuptools wheel
-
-# 3. OpenRLHFをインストール（1つ選択）
+# 2. OpenRLHFをインストール（1つ選択）
 pip install openrlhf                    # 基本
 pip install openrlhf[vllm]              # + vLLM 0.34.0（推奨）
 pip install openrlhf[vllm_latest]       # + 最新vLLM
 pip install openrlhf[vllm,ring,liger]   # + すべての最適化
 ```
 
-FlashAttention 2はビルド済みカーネルとして提供され、transformersが初回使用時にHugging Face Hubからダウンロードするため（約1 GB）、コンパイルは不要です。RingAttention、およびインターネットに接続できないクラスターではFlashAttention 2パッケージ自体が必要です。[Dockerfile](./dockerfile/Dockerfile)でそれを含むイメージをビルドできます：`docker build -t openrlhf dockerfile`。
+FlashAttention 2はビルド済みカーネルとして提供され、transformersが初回使用時にHugging Face Hubからダウンロードするため（約1 GB）、コンパイルは不要です。RingAttention、インターネットに接続できないクラスター、およびNVIDIAドライバーが580より古いホストでは、代わりに[Dockerfile](./dockerfile/Dockerfile)でビルドしたイメージを使用してください：`docker build -t openrlhf dockerfile`。このイメージにはFlashAttention 2パッケージ自体とCUDA前方互換ライブラリが含まれています。
 
 **代替：ソースからインストール**
 

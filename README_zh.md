@@ -293,21 +293,16 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 ```bash
 # 1. 启动 Docker 容器
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 bash
+  -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $PWD:/openrlhf pytorch/pytorch:2.14.0-cuda13.0-cudnn9-devel bash
 
-# 2. 安装 Python
-apt-get update && apt-get install -y python3-dev python3-pip python-is-python3
-export PIP_BREAK_SYSTEM_PACKAGES=1 CUDA_HOME=/usr/local/cuda
-pip install --ignore-installed pip setuptools wheel
-
-# 3. 安装 OpenRLHF（选择一个）
+# 2. 安装 OpenRLHF（选择一个）
 pip install openrlhf                    # 基础
 pip install openrlhf[vllm]              # + vLLM 0.34.0（推荐）
 pip install openrlhf[vllm_latest]       # + 最新 vLLM
 pip install openrlhf[vllm,ring,liger]   # + 所有优化
 ```
 
-FlashAttention 2 以预编译内核的形式提供，由 transformers 在首次使用时从 Hugging Face Hub 下载（约 1 GB），无需编译。RingAttention 以及无法联网的集群需要 FlashAttention 2 软件包本身：可以用 [Dockerfile](./dockerfile/Dockerfile) 构建带有它的镜像，`docker build -t openrlhf dockerfile`。
+FlashAttention 2 以预编译内核的形式提供，由 transformers 在首次使用时从 Hugging Face Hub 下载（约 1 GB），无需编译。RingAttention、无法联网的集群，以及 NVIDIA 驱动低于 580 的主机，请改用 [Dockerfile](./dockerfile/Dockerfile) 构建的镜像，`docker build -t openrlhf dockerfile`：它自带 FlashAttention 2 软件包本身和 CUDA 向前兼容库。
 
 **替代方案：从源码安装**
 
