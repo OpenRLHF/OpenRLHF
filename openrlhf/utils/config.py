@@ -24,3 +24,8 @@ def hierarchize(args):
         return x
 
     return build(root)
+
+
+def to_dict(args):
+    """Inverse of ``hierarchize``: nested SimpleNamespace -> nested dict (e.g. for wandb config)."""
+    return {k: to_dict(v) if isinstance(v, SimpleNamespace) else v for k, v in vars(args).items()}
