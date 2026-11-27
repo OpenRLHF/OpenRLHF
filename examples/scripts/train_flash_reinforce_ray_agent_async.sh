@@ -70,7 +70,6 @@ ENGINE_ARGS=(
    --vllm.num_engines 7
    --vllm.tensor_parallel_size 1
    --vllm.gpu_memory_utilization 0.9
-   --vllm.sync_backend nccl
 
    --ds.zero_stage 2
    --actor.gradient_checkpointing_enable

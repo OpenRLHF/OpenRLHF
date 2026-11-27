@@ -49,6 +49,7 @@ class RolloutRayActor:
             num_gpus=kwargs.pop("num_gpus"),
         )
         self._configure_vllm_env(version, vllm, kwargs.pop("full_determinism", False))
+        self._transfer_rank_offset = kwargs.pop("transfer_rank_offset")
 
         # Execution mode mapping:
         # - custom agent executor: user-provided AgentExecutorBase subclass
@@ -104,25 +105,23 @@ class RolloutRayActor:
 
             os.environ["RAY_ADDRESS"] = global_worker.gcs_client.address
 
-    async def init_process_group(
-        self, master_address, master_port, rank_offset, world_size, group_name, backend, use_ray
-    ):
-        return await self.llm.collective_rpc(
-            "init_process_group",
-            args=(master_address, master_port, rank_offset, world_size, group_name, backend, use_ray),
-        )
+    # vLLM's weight-update control plane (vLLM docs: training/weight_transfer). The actor's
+    # transfer engine drives these four calls through a RayVLLMWeightSyncClient.
+    async def init_weight_transfer_engine(self, request):
+        # Engines are separate vLLM instances, each numbering its workers from zero, so this
+        # engine's workers take the NCCL ranks after those of the engines before it.
+        if "rank_offset" in request.init_info:
+            request.init_info["rank_offset"] += self._transfer_rank_offset
+        await self.llm.init_weight_transfer_engine(request)
 
-    async def update_weight(self, name, dtype, shape, empty_cache=False):
-        return await self.llm.collective_rpc(
-            "update_weight",
-            args=(name, dtype, shape, empty_cache),
-        )
+    async def start_weight_update(self):
+        await self.llm.start_weight_update()
 
-    async def update_weight_cuda_ipc(self, name, dtype, shape, ipc_handles, empty_cache=False):
-        return await self.llm.collective_rpc(
-            "update_weight_cuda_ipc",
-            args=(name, dtype, shape, ipc_handles, empty_cache),
-        )
+    async def update_weights(self, request):
+        await self.llm.update_weights(request)
+
+    async def finish_weight_update(self):
+        await self.llm.finish_weight_update()
 
     async def reset_prefix_cache(self):
         await self.llm.reset_prefix_cache()
@@ -264,7 +263,9 @@ def create_vllm_engines(
         actor_kwargs = {
             "model": pretrain,
             "enforce_eager": enforce_eager,
-            "worker_extension_cls": "openrlhf.trainer.ray.vllm_worker_wrap.WorkerWrap",
+            # CUDA IPC when the engines share GPUs with the actor, NCCL otherwise.
+            "weight_transfer_config": {"backend": "ipc" if use_hybrid_engine else "nccl"},
+            "transfer_rank_offset": i * tensor_parallel_size,
             "tensor_parallel_size": tensor_parallel_size,
             "seed": seed + i,
             "distributed_executor_backend": distributed_executor_backend,

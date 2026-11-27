@@ -17,7 +17,8 @@ readonly training_script="train_dpo_llama.sh"
 readonly GPUS_PER_NODE=8
 
 readonly PROJECT_PATH=$(cd ../../; pwd)
-readonly IMAGE_NAME="nvcr.io/nvidia/pytorch:26.03-py3"
+# An image built from dockerfile/Dockerfile, in a registry the cluster can pull from
+readonly IMAGE_NAME="<OPENRLHF_IMAGE>"
 readonly JOBLOG="$(pwd)/logs/$training_script-$SLURM_JOB_ID.log"
 mkdir logs
 

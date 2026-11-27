@@ -1,8 +1,9 @@
+import math
 import os
-import socket
 from abc import ABC
 from dataclasses import fields
-from typing import Dict, List, Optional, Union
+from functools import cached_property
+from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 import deepspeed
 import ray
@@ -11,6 +12,15 @@ import torch.distributed
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from vllm.distributed.weight_transfer import (
+    ParamMeta,
+    RayVLLMWeightSyncClient,
+    WeightSource,
+    WeightTransferTrainerFactory,
+)
+from vllm.distributed.weight_transfer.ipc_engine import IPCTrainerInitInfo
+from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerInitInfo
+from vllm.utils.network_utils import get_open_port
 
 from openrlhf.models import Actor, PolicyLoss, aggregate_loss
 from openrlhf.models.utils import compute_approx_kl, masked_mean
@@ -21,7 +31,7 @@ from openrlhf.utils.deepspeed.deepspeed_utils import (
     offload_deepspeed_states,
     reload_deepspeed_states,
 )
-from openrlhf.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
+from openrlhf.utils.distributed_util import torch_dist_barrier_and_cuda_sync
 from openrlhf.utils.logging_utils import init_logger
 from openrlhf.utils.loss_utils import get_loss_batch_info, iter_grad_accum_global_norm
 from openrlhf.utils.vlm_utils import merge_mm_train_inputs
@@ -31,7 +41,36 @@ from ..ppo_utils import NaiveReplayBuffer
 logger = init_logger(__name__)
 
 from .launcher import BaseModelActor
-from .utils import get_physical_gpu_id
+
+
+class ActorWeights(WeightSource):
+    """The actor's weights as a weight sync sends them: full tensors under their parameter names."""
+
+    def __init__(self, actor: Actor, ds_args):
+        self.actor = actor
+        self.ds_args = ds_args
+
+    @cached_property
+    def metadata(self) -> List[ParamMeta]:
+        # Read off one pass over the weights, so it cannot disagree with what iter_full sends: vLLM
+        # sizes its receive buffers from this list, and a disagreement hangs the transfer.
+        return [ParamMeta(name, weight.dtype, tuple(weight.shape)) for name, weight in self.iter_full()]
+
+    def iter_full(self) -> Iterator[Tuple[str, torch.Tensor]]:
+        """Gathering a ZeRO-3 / AutoTP parameter is a collective, so every actor rank iterates this in step."""
+        model = self.actor.model.module
+        for name, param in model.named_parameters():
+            # VLM: only sync trainable (language model) params — vision encoder is frozen.
+            if getattr(self.actor, "is_vlm", False) and not param.requires_grad:
+                continue
+            if self.ds_args.tensor_parallel_size > 1:
+                gathered = deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True)
+            else:
+                gathered = deepspeed.zero.GatheredParameters([param], enabled=self.ds_args.zero_stage == 3)
+            with gathered:
+                # vLLM packs a chunk of tensors after iterating past them, when a gathered
+                # parameter has been released again, so hand over a copy.
+                yield name, param.data.clone()
 
 
 class ActorPPOTrainer(ABC):
@@ -96,59 +135,42 @@ class ActorPPOTrainer(ABC):
             self.args.train.dynamic_batch_enable,
         )
 
-        # Init torch group for weights sync
-        backend = getattr(self.strategy.args.vllm, "sync_backend", "nccl")
-        self.use_cuda_ipc = backend == "nccl" and self.args.train.colocate_all and not self.args.train.async_enable
-
-        if self.vllm_engines is not None and not self.use_cuda_ipc and torch.distributed.get_rank() == 0:
-            self._init_vllm_sync_group(backend)
+        if self.vllm_engines is not None:
+            self._init_vllm_weight_transfer()
 
         torch_dist_barrier_and_cuda_sync()
 
-    def _init_vllm_sync_group(self, backend: str):
-        """Create a torch process group between DeepSpeed rank 0 and all vLLM engine ranks.
+    def _init_vllm_weight_transfer(self):
+        """Join vLLM's weight transfer (vLLM docs: training/weight_transfer); every actor rank calls this.
 
-        Layout example (3 engines, TP=4):
+        Rank 0 is the only sender, the other ranks only take part in the ZeRO-3 / AutoTP gathers.
+        Engines that share GPUs with the actor (hybrid engine) read the weights over CUDA IPC.
+        Otherwise rank 0 forms an NCCL group with every vLLM worker, e.g. 3 engines with TP=4:
             [    0,      1, 2, 3, 4,  5, 6, 7, 8,  9, 10, 11, 12]
             |ds rank 0 |  engine-0  |  engine-1  |   engine-2   |
-
-        ZeRO-1/2: broadcast params from rank 0 to all engines.
-        ZeRO-3:   allgather to rank 0 first, then broadcast.
         """
-        master_address = ray._private.services.get_node_ip_address()
-        with socket.socket() as sock:
-            sock.bind(("", 0))
-            master_port = sock.getsockname()[1]
-
-        vllm_num_engines = self.strategy.args.vllm.num_engines
-        vllm_tensor_parallel_size = self.strategy.args.vllm.tensor_parallel_size
-        world_size = vllm_num_engines * vllm_tensor_parallel_size + 1
-
-        use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
-        group_name = "openrlhf"
-        refs = [
-            engine.init_process_group.remote(
-                master_address,
-                master_port,
-                i * vllm_tensor_parallel_size + 1,
-                world_size,
-                group_name,
-                backend=backend,
-                use_ray=use_ray,
-            )
-            for i, engine in enumerate(self.vllm_engines)
-        ]
-        if use_ray:
-            import ray.util.collective as collective
-
-            collective.init_collective_group(world_size=world_size, rank=0, backend=backend, group_name=group_name)
-            self._model_update_group = group_name
+        args = self.strategy.args
+        rank = torch.distributed.get_rank()
+        source = ActorWeights(self.actor, args.ds)
+        # 512 MiB chunks: both sides hold a buffer per chunk next to the model, and vLLM's
+        # default of 1 GiB is too much headroom at a high gpu_memory_utilization.
+        chunk_bytes = 512 * 1024**2
+        if args.train.colocate_all and not args.train.async_enable:
+            # A CUDA IPC chunk is one buffer of fixed size, so it must also hold the largest tensor.
+            largest = max(math.prod(meta.shape) * meta.dtype.itemsize for meta in source.metadata)
+            init_info = IPCTrainerInitInfo(rank=rank, packed=True, packed_buffer_size_bytes=max(chunk_bytes, largest))
         else:
-            self._model_update_group = stateless_init_process_group(
-                master_address, master_port, 0, world_size, torch.cuda.current_device()
+            init_info = NCCLTrainerInitInfo(
+                master_address=ray.util.get_node_ip_address(),
+                master_port=get_open_port(),
+                world_size=1 + args.vllm.num_engines * args.vllm.tensor_parallel_size,
+                rank=rank,
+                packed=True,
+                packed_buffer_size_bytes=chunk_bytes,
             )
-
-        ray.get(refs)
+        self._weight_transfer = WeightTransferTrainerFactory.trainer_init(
+            init_info=init_info, client=RayVLLMWeightSyncClient(self.vllm_engines), source=source
+        )
 
     def ppo_train(self, kl_ctl: float):
         # replay buffer may be empty at first, we should rebuild at each training
@@ -407,6 +429,7 @@ class ActorPPOTrainer(ABC):
         }
 
     def broadcast_to_vllm(self):
+        """One weight sync, on every actor rank: rank 0 sends, the others join the gathers."""
         use_prefix_cache = getattr(self.strategy.args.vllm, "enable_prefix_caching", False)
         cache_reset_refs = []
         if use_prefix_cache and torch.distributed.get_rank() == 0:
@@ -415,74 +438,7 @@ class ActorPPOTrainer(ABC):
                 cache_reset_refs.append(engine.reset_prefix_cache.remote())
 
         torch.cuda.empty_cache()
-        model = self.actor.model.module
-        count = 0
-
-        def _broadcast_param(param, count, num_params):
-            use_ray = getattr(self.strategy.args.vllm, "sync_with_ray", False)
-            # Fire all vllm engines for broadcast
-            if torch.distributed.get_rank() == 0:
-                shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight.remote(name, dtype=param.dtype, shape=shape, empty_cache=count == num_params)
-                    for engine in self.vllm_engines
-                ]
-
-                if use_ray:
-                    import ray.util.collective as collective
-
-                    collective.broadcast(param.data, 0, group_name=self._model_update_group)
-                else:
-                    self._model_update_group.broadcast(param.data, src=0, stream=torch.cuda.current_stream())
-                ray.get(refs)
-
-        def _handle_cuda_ipc(param, count, num_params):
-            from torch.multiprocessing.reductions import reduce_tensor
-
-            weight = param.data.clone()
-            ipc_handle = reduce_tensor(weight)
-
-            ipc_handle = {get_physical_gpu_id(): ipc_handle}
-            ipc_handle_list = [None] * torch.distributed.get_world_size()
-            torch.distributed.all_gather_object(ipc_handle_list, ipc_handle)
-
-            if torch.distributed.get_rank() == 0:
-                ipc_handles = {}
-                for d in ipc_handle_list:
-                    ipc_handles.update(d)
-
-                shape = param.shape if self.strategy.args.ds.zero_stage != 3 else param.ds_shape
-                refs = [
-                    engine.update_weight_cuda_ipc.remote(
-                        name,
-                        dtype=param.dtype,
-                        shape=shape,
-                        ipc_handles=ipc_handles,
-                        empty_cache=count == num_params,
-                    )
-                    for engine in self.vllm_engines
-                ]
-                ray.get(refs)
-            torch_dist_barrier_and_cuda_sync()
-
-        def _gather_params_ctx(param):
-            """Context manager that gathers sharded/TP-split parameters for weight sync."""
-            if self.strategy.args.ds.tensor_parallel_size > 1:
-                return deepspeed.module_inject.layers.GatherReplacedLayerParams([param], model, enabled=True)
-            return deepspeed.zero.GatheredParameters([param], enabled=self.strategy.args.ds.zero_stage == 3)
-
-        sync_fn = _handle_cuda_ipc if self.use_cuda_ipc else _broadcast_param
-
-        # VLM: only sync trainable (language model) params — vision encoder is frozen.
-        params_to_sync = [
-            (n, p) for n, p in model.named_parameters() if p.requires_grad or not getattr(self.actor, "is_vlm", False)
-        ]
-        num_params = len(params_to_sync)
-
-        for name, param in params_to_sync:
-            count += 1  # empty_cache at last param
-            with _gather_params_ctx(param):
-                sync_fn(param, count, num_params)
+        self._weight_transfer.send_weights()
 
         if cache_reset_refs:
             ray.get(cache_reset_refs)
@@ -498,15 +454,6 @@ class PolicyModelActor(BaseModelActor):
         self.disable_ds_ckpt = args.ckpt.disable_ds
         self.vllm_engines = vllm_engines
         self.max_steps = max_steps
-
-        # Skip for vLLM >= 0.16 where NCCL_CUMEM_ENABLE=0 causes ncclCommInitRank to fail
-        # with "unhandled cuda error" under NCCL 2.27+.
-        if getattr(args.vllm, "sync_backend", "nccl") == "nccl":
-            import vllm
-            from packaging import version as pkg_version
-
-            if pkg_version.parse(vllm.__version__) < pkg_version.parse("0.16"):
-                os.environ["NCCL_CUMEM_ENABLE"] = "0"
 
         self._setup_distributed(strategy)
 

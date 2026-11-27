@@ -293,17 +293,16 @@ OpenRLHF 提供完整的 RLHF 流程，具有基于 Agent 的灵活性：
 ```bash
 # 1. 启动 Docker 容器
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:26.03-py3 bash
+  -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $PWD:/openrlhf pytorch/pytorch:2.14.0-cuda13.0-cudnn9-devel bash
 
-# 2. 清理冲突包
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
-
-# 3. 安装 OpenRLHF（选择一个）
+# 2. 安装 OpenRLHF（选择一个）
 pip install openrlhf                    # 基础
-pip install openrlhf[vllm]              # + vLLM 0.29.0（推荐）
+pip install openrlhf[vllm]              # + vLLM 0.34.0（推荐）
 pip install openrlhf[vllm_latest]       # + 最新 vLLM
 pip install openrlhf[vllm,ring,liger]   # + 所有优化
 ```
+
+FlashAttention 2 以预编译内核的形式提供，由 transformers 在首次使用时从 Hugging Face Hub 下载（约 1 GB），无需编译。RingAttention、无法联网的集群，以及 NVIDIA 驱动低于 580 的主机，请改用 [Dockerfile](./dockerfile/Dockerfile) 构建的镜像，`docker build -t openrlhf dockerfile`：它自带 FlashAttention 2 软件包本身和 CUDA 向前兼容库。
 
 **替代方案：从源码安装**
 
@@ -314,7 +313,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> 我们推荐 **vLLM 0.29.0+** 以获得最佳性能。参见 [Dockerfiles](./dockerfile/) 和 [Nvidia-Docker 安装脚本](./examples/scripts/nvidia_docker_install.sh)。
+> 我们推荐 **vLLM 0.34.0+** 以获得最佳性能。参见 [Dockerfiles](./dockerfile/) 和 [Nvidia-Docker 安装脚本](./examples/scripts/nvidia_docker_install.sh)。
 
 ### 准备数据集
 
@@ -480,7 +479,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
    --ds.packing_samples \
-   --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \
@@ -746,7 +744,6 @@ python -m openrlhf.cli.lora_combiner \
 
 1. **生成阶段**：最大化 `--rollout.micro_batch_size`，最小化 vLLM TP 大小
 2. **训练阶段**：最大化 `--train.micro_batch_size`，启用 `--ds.packing_samples`
-3. **vLLM**：始终使用 `--vllm.sync_backend nccl`
 
 > [!TIP]
 > **快速开始模板**：对于 8x A100（80GB），尝试混合引擎 + `--vllm.gpu_memory_utilization 0.5` + `--train.colocate_all`

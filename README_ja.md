@@ -288,17 +288,16 @@ OpenRLHFは、エージェントベースの柔軟性を備えた完全なRLHF�
 ```bash
 # 1. Dockerコンテナを起動
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:26.03-py3 bash
+  -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $PWD:/openrlhf pytorch/pytorch:2.14.0-cuda13.0-cudnn9-devel bash
 
-# 2. 競合するパッケージをクリーンアップ
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
-
-# 3. OpenRLHFをインストール（1つ選択）
+# 2. OpenRLHFをインストール（1つ選択）
 pip install openrlhf                    # 基本
-pip install openrlhf[vllm]              # + vLLM 0.29.0（推奨）
+pip install openrlhf[vllm]              # + vLLM 0.34.0（推奨）
 pip install openrlhf[vllm_latest]       # + 最新vLLM
 pip install openrlhf[vllm,ring,liger]   # + すべての最適化
 ```
+
+FlashAttention 2はビルド済みカーネルとして提供され、transformersが初回使用時にHugging Face Hubからダウンロードするため（約1 GB）、コンパイルは不要です。RingAttention、インターネットに接続できないクラスター、およびNVIDIAドライバーが580より古いホストでは、代わりに[Dockerfile](./dockerfile/Dockerfile)でビルドしたイメージを使用してください：`docker build -t openrlhf dockerfile`。このイメージにはFlashAttention 2パッケージ自体とCUDA前方互換ライブラリが含まれています。
 
 **代替：ソースからインストール**
 
@@ -309,7 +308,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> 最高のパフォーマンスのために**vLLM 0.29.0+**を推奨します。[Dockerfiles](./dockerfile/)と[Nvidia-Dockerインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)を参照してください。
+> 最高のパフォーマンスのために**vLLM 0.34.0+**を推奨します。[Dockerfiles](./dockerfile/)と[Nvidia-Dockerインストールスクリプト](./examples/scripts/nvidia_docker_install.sh)を参照してください。
 
 詳細な使用方法、データセット準備、学習例については、英語版READMEの該当セクションを参照してください。
 

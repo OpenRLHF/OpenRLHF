@@ -14,7 +14,8 @@
 # project settings
 OPENRLHF_PATH=<OPENRLHF_ROOT_PATH>
 MOUNT="$OPENRLHF_PATH:/openrlhf,$HOME/.cache:/root/.cache"
-IMAGE_NAME="nvcr.io/nvidia/pytorch:26.03-py3"
+# An image built from dockerfile/Dockerfile, in a registry the cluster can pull from
+IMAGE_NAME="<OPENRLHF_IMAGE>"
 RAY_VERSION=2.12.0
 
 JOBLOG="$(realpath .)/train_ppo_llama_ray-$SLURM_JOB_ID.log"
@@ -89,7 +90,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$node_1" --container-image="$IMAGE_NAME"
     --reward.normalize_enable \
     --ds.adam_offload \
     --ds.packing_samples \
-    --vllm.sync_backend nccl \
     --actor.gradient_checkpointing_enable \
     --logger.wandb.key {wandb_token}" &>> ${JOBLOG}
 

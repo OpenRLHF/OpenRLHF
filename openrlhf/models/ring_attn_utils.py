@@ -1,7 +1,6 @@
 import torch
 import torch.distributed as dist
-from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-from flash_attn.utils.distributed import all_gather
+from transformers.modeling_flash_attention_utils import _index_first_axis, _pad_input, _unpad_input
 
 RING_ATTN_GROUP = None
 
@@ -18,6 +17,22 @@ def patch_transformers_for_ring_flash_attn():
         from transformers.utils import is_flash_attn_greater_or_equal_2_10
 
         _m.is_flash_attn_greater_or_equal_2_10 = is_flash_attn_greater_or_equal_2_10
+
+
+def substitute_hf_flash_attn(group, heads_k_stride):
+    """Run transformers' flash attention as ring attention over `group`.
+
+    ring_flash_attn<=0.1.8's own substitute_hf_flash_attn picks its replacement by the parameter
+    count of transformers' _flash_attention_forward and rejects a count it does not know, such as
+    that of transformers 5.22. Its newest replacement takes **kwargs, so install that one directly.
+    """
+    patch_transformers_for_ring_flash_attn()
+    import transformers.modeling_flash_attention_utils as hf_flash_attn
+    from ring_flash_attn.adapters import hf_adapter
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+    hf_flash_attn._flash_attention_forward = hf_adapter.create_ring_flash_attention_forward(group, heads_k_stride)[-1]
+    ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = hf_adapter.flash_attention_forward
 
 
 def set_ring_attn_group(group):
@@ -127,17 +142,11 @@ def unpad_and_slice_tensor(sequences, attention_mask, ring_attn_group):
         tuple: Processed sequences and related tensors for ring attention
     """
     rolled_sequences = torch.roll(sequences, shifts=-1, dims=1)
-    sequences, indices, cu_seqlens, _, _ = unpad_input(sequences.unsqueeze(-1), attention_mask)
+    sequences, indices, cu_seqlens, _, _ = _unpad_input(sequences.unsqueeze(-1), attention_mask)
     sequences = sequences.transpose(0, 1)  # (1, total_seqs)
-    rolled_sequences = index_first_axis(
-        rearrange(rolled_sequences.unsqueeze(-1), "b s ... -> (b s) ..."), indices
-    ).transpose(
-        0, 1
-    )  # (1, total_seqs)
+    rolled_sequences = _index_first_axis(rolled_sequences.unsqueeze(-1), indices).transpose(0, 1)  # (1, total_seqs)
     position_ids = torch.clip(torch.cumsum(attention_mask, dim=-1) - 1, min=0, max=None)
-    position_ids = index_first_axis(rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices).transpose(
-        0, 1
-    )  # (1, total_seqs)
+    position_ids = _index_first_axis(position_ids.unsqueeze(-1), indices).transpose(0, 1)  # (1, total_seqs)
     ring_attn_pad_len = 0
     if ring_attn_group is not None:
         (sequences, position_ids, rolled_sequences), ring_attn_pad_len = get_tensor_in_current_ring_attn_rank(
@@ -175,8 +184,10 @@ def gather_and_pad_tensor(tensor, ring_attn_group, ring_attn_pad_len, indices, b
         Padded tensor
     """
     if ring_attn_group is not None:
+        from flash_attn.utils.distributed import all_gather  # only RingAttention needs the flash-attn package
+
         tensor = all_gather(tensor.transpose(0, 1), ring_attn_group).transpose(0, 1)  # (1, total_seqs)
         if ring_attn_pad_len > 0:
             tensor = tensor[:, :-ring_attn_pad_len]
-    tensor = pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
+    tensor = _pad_input(tensor.transpose(0, 1), indices, batch, seqlen).squeeze(-1)  # (batch, seqlen)
     return tensor

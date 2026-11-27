@@ -294,17 +294,16 @@ OpenRLHF provides a complete RLHF pipeline with agent-based flexibility:
 ```bash
 # 1. Launch Docker container
 docker run --runtime=nvidia -it --rm --shm-size="10g" --cap-add=SYS_ADMIN \
-  -v $PWD:/openrlhf nvcr.io/nvidia/pytorch:26.03-py3 bash
+  -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $PWD:/openrlhf pytorch/pytorch:2.14.0-cuda13.0-cudnn9-devel bash
 
-# 2. Clean conflicting packages
-sudo pip uninstall xgboost transformer_engine flash_attn pynvml -y
-
-# 3. Install OpenRLHF (choose one)
+# 2. Install OpenRLHF (choose one)
 pip install openrlhf                    # Basic
-pip install openrlhf[vllm]              # + vLLM 0.29.0 (recommended)
+pip install openrlhf[vllm]              # + vLLM 0.34.0 (recommended)
 pip install openrlhf[vllm_latest]       # + Latest vLLM
 pip install openrlhf[vllm,ring,liger]   # + All optimizations
 ```
+
+FlashAttention 2 comes as a prebuilt kernel that transformers downloads from the Hugging Face Hub on first use (about 1 GB), so nothing is compiled. RingAttention, clusters without internet access, and hosts whose NVIDIA driver is older than 580 need the image built from the [Dockerfile](./dockerfile/Dockerfile) instead, `docker build -t openrlhf dockerfile`: it carries the FlashAttention 2 package itself and the CUDA forward-compatibility libraries.
 
 **Alternative: Install from source**
 
@@ -315,7 +314,7 @@ pip install -e .
 ```
 
 > [!TIP]
-> We recommend **vLLM 0.29.0+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
+> We recommend **vLLM 0.34.0+** for best performance. See [Dockerfiles](./dockerfile/) and [Nvidia-Docker Install Script](./examples/scripts/nvidia_docker_install.sh).
 
 ### Prepare Datasets
 
@@ -483,7 +482,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --reward.normalize_enable \
    --actor.gradient_checkpointing_enable \
    --ds.packing_samples \
-   --vllm.sync_backend nccl \
    --vllm.enforce_eager \
    --vllm.enable_sleep \
    --ds.enable_sleep \
@@ -765,7 +763,6 @@ Pick the execution mode based on your priority — OpenRLHF gives you a clear tr
 
 1. **Generation Phase**: Maximize `--rollout.micro_batch_size`, minimize vLLM TP size
 2. **Training Phase**: Maximize `--train.micro_batch_size`, enable `--ds.packing_samples`
-3. **vLLM**: Always use `--vllm.sync_backend nccl`
 
 > [!TIP]
 > **Quick Start Template**: For 8x A100 (80GB), try Hybrid Engine + `--vllm.gpu_memory_utilization 0.5` + `--train.colocate_all`
