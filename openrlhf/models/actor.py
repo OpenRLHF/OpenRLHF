@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from peft.tuners.lora import LoraLayer
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, BitsAndBytesConfig
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .ring_attn_utils import gather_and_pad_tensor, unpad_and_slice_tensor
@@ -94,6 +94,23 @@ class Actor(nn.Module):
     ) -> None:
         super().__init__()
         self.temperature = temperature
+
+        if packing_samples:
+            config = (
+                AutoConfig.from_pretrained(pretrain_or_model, trust_remote_code=True)
+                if isinstance(pretrain_or_model, str)
+                else getattr(pretrain_or_model, "config", None)
+            )
+            text_config = getattr(config, "text_config", config)
+            # Position resets do not isolate recurrent or convolution state (#1421).
+            if {"linear_attention", "conv"}.intersection(getattr(text_config, "layer_types", None) or []) or getattr(
+                text_config, "model_type", None
+            ) == "mamba2":
+                raise ValueError(
+                    "packing_samples is not supported for models with recurrent, convolutional, or state-space layers "
+                    "(e.g. Qwen3.5, LFM2, Mamba2): state can leak across samples. Disable --ds.packing_samples and "
+                    "--train.dynamic_batch_enable, and set --ds.ring_attn_size 1."
+                )
 
         if isinstance(pretrain_or_model, str):
             # Support multiple attention mechanism implementations
