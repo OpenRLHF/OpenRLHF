@@ -12,6 +12,47 @@ from tests.test_experience import Experience
 from tests.test_loss_aggregation import _loss_module
 
 
+@pytest.mark.parametrize(
+    "answer, target, expected",
+    [
+        ("1,234,567", "1234567", True),
+        ("12,345,678", "12345678", True),
+        ("123,456,789", "123456789", True),
+        ("1,234,567,890", "1234567890", True),
+        ("12,345,678,901", "12345678901", True),
+        ("123,456,789,012", "123456789012", True),
+        ("1,234,567,890,123", "1234567890123", True),
+        ("-1,234,567,890", "-1234567890", True),
+        ("1,234,567,890.5", "1234567890.5", True),
+        ("(1,234,567,890, 9)", "(1234567890, 9)", True),
+        ("1,234,567,890 cm", "1234567890 cm", True),
+        ("-1,234,567", "-1234567", True),
+        ("+1,234,567", "1234567", True),
+        ("1,234,567.5", "1234567.5", True),
+        ("(1,234,567, 9)", "(1234567, 9)", True),
+        ("1,234,567 cm", "1234567 cm", True),
+        ("1,234", "1234", True),
+        ("12,345", "12345", True),
+        ("1234567", "1234567", True),
+        ("(1,2)", "(1,2)", True),
+        ("(1,2)", "(12)", False),
+        ("(1,2,3)", "123", False),
+        ("12,34", "1234", False),
+        ("1,2345", "12345", False),
+        ("1,234,567", "1234568", False),
+    ],
+)
+def test_math_reward_preserves_adjacent_thousands_groups(answer, target, expected):
+    from examples.python.math_reward_func import reward_func
+    from openrlhf.utils.math_utils import grade_answer
+
+    assert grade_answer(answer, target) is expected
+    reward = reward_func([f"question: \\boxed{{{answer}}}"], ["question: "], [target])
+    assert reward["rewards"].tolist() == [float(expected)]
+    assert reward["scores"].tolist() == [float(expected)]
+    assert reward["extra_logs"]["math_accuracy"].item() == float(expected)
+
+
 @pytest.fixture
 def maker_module(agent_modules, monkeypatch):
     monkeypatch.setitem(sys.modules, "openrlhf.models.utils", sys.modules[_loss_module.__package__ + ".utils"])

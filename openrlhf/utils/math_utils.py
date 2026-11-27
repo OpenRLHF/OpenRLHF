@@ -173,13 +173,7 @@ def _is_frac(expr: str) -> bool:
 
 
 def _strip_properly_formatted_commas(expr: str) -> str:
-    pattern = re.compile(r"(\d)(,)(\d\d\d)($|\D)")
-    while True:
-        next_expr = pattern.sub(r"\1\3\4", expr)
-        if next_expr == expr:
-            break
-        expr = next_expr
-    return next_expr
+    return re.sub(r"(?<=\d),(?=\d{3}(?:$|\D))", "", expr)
 
 
 def _str_is_int(value: str) -> bool:
