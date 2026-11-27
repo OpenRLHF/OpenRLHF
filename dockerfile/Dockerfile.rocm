@@ -1,0 +1,112 @@
+
+FROM rocm/primus:v26.4
+
+ARG OPENRLHF_REPO=https://github.com/OpenRLHF/OpenRLHF.git
+
+ARG VLLM_REPO=https://github.com/vllm-project/vllm.git
+ARG VLLM_COMMIT=49eb2accf0610d220f451f2f3c1dfe93fe395c79
+ARG VLLM_VERSION_PREFIX=0.28.1rc1.dev479+g49eb2accf
+
+
+ARG PYTORCH_ROCM_ARCH=gfx942
+ARG MAX_JOBS=96
+
+ARG TORCH_EXPECTED=2.12.0+rocm7.14.0a20260608
+
+LABEL org.opencontainers.image.title="OpenRLHF + vLLM main on ROCm" \
+      org.opencontainers.image.base.name="rocm/primus:v26.4" \
+      fada.run_id="openrlhf_porting_20260907_0809" \
+      fada.openrlhf.ref="main" \
+      fada.vllm.commit="49eb2accf0610d220f451f2f3c1dfe93fe395c79" \
+      fada.vllm.describe="v0.28.1rc0-479-g49eb2accf0" \
+      fada.patches="none — zero framework/library source patches"
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN set -eux; \
+    python3 -c 'import torch; print("baseline torch", torch.__version__, "hip", torch.version.hip)'; \
+    python3 -c "import torch, sys; sys.exit(0 if torch.__version__ == '${TORCH_EXPECTED}' else 1)"
+
+
+# This base is a pip-packaged-ROCm image: there is no /opt/rocm, so the classic
+# `pip install /opt/rocm/share/amd_smi` recipe does not apply. The bindings already ship inside the
+# ROCm SDK wheel but are not on sys.path, so they are symlinked in — the recipe the ROCm library KB
+# gives for exactly this image family. The glob tolerates the bindings living under either
+# _rocm_sdk_core or _rocm_sdk_devel, and `set -e` fails the build if neither exists.
+RUN set -eux; \
+    SP="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+    SRC="$(ls -d "$SP"/_rocm_sdk_*/share/amd_smi/amdsmi | head -n1)"; \
+    ln -sfn "$SRC" "$SP/amdsmi"; \
+    python3 -c 'import amdsmi; print("amdsmi ->", amdsmi.__file__)'
+
+
+# deepspeed, ray and transformers versions come from the OpenRLHF v0.11.0 requirements.txt this
+# image was validated against. Since the install below tracks OpenRLHF main, its requirements.txt
+# may bump them again; the torch guard after that step is what catches a resolution that would
+# swap out the ROCm torch build.
+#
+# hjson / py-cpuinfo / msgpack are NOT decoration: on this image a DeepSpeed install that misses
+# them leaves `import deepspeed` failing inside deepspeed/runtime/config.py. They are listed
+# explicitly so the failure cannot come back through a resolver change.
+#
+# transformers 5.15.0 is a MAJOR-version jump from the base image's 4.55.0. It was this run's
+# highest-rated first-contact risk and turned out to be a non-event: it installs cleanly, satisfies
+# vLLM main's `transformers >= 5.10.4`, and leaves the ROCm torch byte-identical.
+RUN set -eux; \
+    pip install --no-cache-dir deepspeed==0.19.5 hjson py-cpuinfo msgpack; \
+    pip install --no-cache-dir 'ray[default]==2.55.0'; \
+    pip install --no-cache-dir transformers==5.15.0; \
+    python3 -c "import torch, sys; print('torch', torch.__version__); sys.exit(0 if torch.__version__ == '${TORCH_EXPECTED}' else 1)"
+
+RUN set -eux; \
+    git clone "${VLLM_REPO}" /workspace/vllm
+
+RUN set -eux; \
+    cd /workspace/vllm; \
+    git checkout --quiet "${VLLM_COMMIT}"; \
+    test "$(git rev-parse HEAD)" = "${VLLM_COMMIT}"; \
+    echo "vllm sha=$(git rev-parse HEAD) describe=$(git describe --tags)"
+
+RUN set -eux; \
+    cd /workspace/vllm; \
+    pip install --no-cache-dir --upgrade numba scipy 'huggingface-hub[cli]' setuptools_scm; \
+    pip install --no-cache-dir -r requirements/rocm.txt; \
+    python3 -c "import torch, sys; print('torch after requirements', torch.__version__); sys.exit(0 if torch.__version__ == '${TORCH_EXPECTED}' else 1)"
+
+ENV PYTORCH_ROCM_ARCH=${PYTORCH_ROCM_ARCH} \
+    VLLM_TARGET_DEVICE=rocm
+
+RUN set -eux; \
+    cd /workspace/vllm; \
+    export MAX_JOBS="${MAX_JOBS}"; \
+    echo "building vllm PYTORCH_ROCM_ARCH=${PYTORCH_ROCM_ARCH} MAX_JOBS=${MAX_JOBS}"; \
+    python3 setup.py install; \
+    pip uninstall tilelang -y; \
+    rm -rf /workspace/vllm/build; \
+    python3 -c "import torch, sys; print('torch after build', torch.__version__); sys.exit(0 if torch.__version__ == '${TORCH_EXPECTED}' else 1)"; \
+    python3 -c "import importlib.metadata as m, sys; v = m.version('vllm'); print('vllm', v); sys.exit(0 if v.startswith('${VLLM_VERSION_PREFIX}') else 1)"
+
+RUN set -eux; \
+    git clone "${OPENRLHF_REPO}" /workspace/openrlhf
+
+RUN set -eux; \
+    cd /workspace/openrlhf; \
+    echo "openrlhf sha=$(git rev-parse HEAD) describe=$(git describe --tags)"; \
+    pip install --no-cache-dir -e .; \
+    python3 -c "import torch, sys; print('torch after openrlhf', torch.__version__); sys.exit(0 if torch.__version__ == '${TORCH_EXPECTED}' else 1)"
+
+RUN set -eux; \
+    git config --global --add safe.directory /workspace/vllm; \
+    git config --global --add safe.directory /workspace/openrlhf
+
+
+ENV VLLM_USE_MEGA_AOT_ARTIFACT=0
+ENV TOKENIZERS_PARALLELISM=false
+ENV HSA_ENABLE_IPC_MODE_LEGACY=1
+
+ENV VLLM_CACHE_ROOT=/workspace/.cache/vllm
+RUN mkdir -p /workspace/.cache/vllm
+
+WORKDIR /workspace/openrlhf
+
+CMD ["/bin/bash"]
