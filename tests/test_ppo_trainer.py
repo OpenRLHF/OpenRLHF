@@ -176,3 +176,147 @@ def test_restore_checkpoint_metric_compatibility(ppo_module, state, best, latest
     trainer.restore_best_checkpoint_state(state)
     assert trainer.best_eval_metric_value == best
     assert trainer._latest_eval_metric_value == latest
+
+
+@pytest.fixture
+def async_ppo_module(ppo_module, monkeypatch):
+    fake_ray = sys.modules["ray"]
+    fake_ray.method.side_effect = lambda **_: lambda fn: fn
+    monkeypatch.setitem(sys.modules, "ray.util.queue", MagicMock())
+    monkeypatch.setitem(sys.modules, "openrlhf.trainer.ppo_trainer", ppo_module)
+    spec = importlib.util.spec_from_file_location(
+        "_openrlhf_async_ppo_test",
+        Path(__file__).resolve().parents[1] / "openrlhf/trainer/ppo_trainer_async.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("start,interval", [(0, 1), (0, 2), (10, 3)])
+def test_async_best_checkpoint_evaluates_exact_updated_model(async_ppo_module, start, interval):
+    from queue import Queue
+
+    trainer = async_ppo_module.TrainingActor.__new__(async_ppo_module.TrainingActor)
+    trainer.args = SimpleNamespace(
+        eval=SimpleNamespace(dataset="math", steps=interval),
+        algo=SimpleNamespace(dynamic_filtering_enable=False),
+    )
+    trainer.rollout_queue, trainer.rollout_slots = Queue(), Queue()
+    for sample in range(1, 7):
+        trainer.rollout_queue.put(([sample], {"total_consumed_prompts": sample}, None, 0))
+    trainer.rollout_queue.put("done")
+    trainer.wandb_logger = trainer.tensorboard_logger = None
+    trainer.best_eval_metric_key, trainer.best_eval_metric_value = "", float("-inf")
+    trainer.critic_model_group = None
+    events, state = [], {"step": start}
+
+    def train(samples, step):
+        assert step == state["step"]
+        state["step"] += 1
+        events.append(("train", state["step"]))
+        return {}, state["step"]
+
+    def evaluate():
+        events.append(("eval", state["step"]))
+        return {"eval_math_pass1": state["step"] / 100}
+
+    def save(**kwargs):
+        assert kwargs["method_name"] == "save_checkpoint"
+        assert kwargs["tag"] == f"best_global_step{state['step']}"
+        assert kwargs["client_states"]["global_step"] == state["step"]
+        assert kwargs["client_states"]["total_consumed_prompts"] == state["step"] - start
+        assert kwargs["metric_value"] == state["step"] / 100
+        events.append(("save", state["step"]))
+        return []
+
+    trainer.train_step = train
+    trainer.generator_actor = SimpleNamespace(_run_eval=SimpleNamespace(remote=evaluate))
+    trainer.actor_model_group = SimpleNamespace(async_run_method=save)
+    trainer.save_logs_and_checkpoints = lambda *_: None
+    trainer.fit(start)
+    expected = []
+    for step in range(start + 1, start + 7):
+        expected.append(("train", step))
+        if step % interval == 0:
+            expected.extend([("eval", step), ("save", step)])
+    assert events == expected
+    assert trainer.rollout_slots.qsize() == 6
+
+
+@pytest.mark.parametrize("best_key,dataset", [("none", "math"), ("", None)])
+def test_async_trainer_does_not_request_unneeded_eval(async_ppo_module, best_key, dataset):
+    from queue import Queue
+
+    trainer = async_ppo_module.TrainingActor.__new__(async_ppo_module.TrainingActor)
+    trainer.args = SimpleNamespace(
+        eval=SimpleNamespace(dataset=dataset, steps=1), algo=SimpleNamespace(dynamic_filtering_enable=False)
+    )
+    trainer.rollout_queue, trainer.rollout_slots = Queue(), Queue()
+    trainer.rollout_queue.put(([1], {}, None, 0))
+    trainer.rollout_queue.put("done")
+    trainer.best_eval_metric_key = best_key
+    trainer.wandb_logger = trainer.tensorboard_logger = None
+    trainer.generator_actor = MagicMock()
+    trainer.train_step = lambda _samples, step: ({}, step + 1)
+    trainer.save_logs_and_checkpoints = lambda *_: None
+    trainer.fit()
+    trainer.generator_actor._run_eval.remote.assert_not_called()
+
+
+@pytest.mark.parametrize("best_key,expected", [("", False), ("eval_math_pass1", False), ("none", True)])
+def test_async_generator_owns_only_eval_without_best_saving(async_ppo_module, best_key, expected):
+    generator = async_ppo_module.GenerateSamplesActor.__new__(async_ppo_module.GenerateSamplesActor)
+    generator.args = SimpleNamespace(ckpt=SimpleNamespace(best_metric_key=best_key), eval=SimpleNamespace(steps=2))
+    generator.eval_dataloader = object()
+    generator._last_eval_step = -1
+    generator._best_metric_key = best_key
+    assert generator._should_eval(2) is expected
+
+
+def test_async_eval_releases_both_locks_on_failure(async_ppo_module):
+    import threading
+
+    generator = async_ppo_module.GenerateSamplesActor.__new__(async_ppo_module.GenerateSamplesActor)
+    generator._generation_lock = threading.Lock()
+    generator.vllm_lock = MagicMock()
+    generator.generate_kwargs = {}
+    generator.args = SimpleNamespace(eval=SimpleNamespace(temperature=1.0, n_samples_per_prompt=1))
+    generator.eval_dataloader = []
+    generator.samples_generator = MagicMock()
+    generator.samples_generator.generate_eval_samples.side_effect = RuntimeError("evaluation failed")
+    with pytest.raises(RuntimeError, match="evaluation failed"):
+        generator._run_eval()
+    assert generator._generation_lock.acquire(blocking=False)
+    generator._generation_lock.release()
+    generator.vllm_lock.release.remote.assert_called_once()
+    generator.samples_generator.generate_eval_samples.side_effect = None
+    generator.samples_generator.generate_eval_samples.return_value = []
+    assert generator._run_eval() == {}
+
+
+@pytest.mark.parametrize("configured,restored", [("", "none"), ("none", "eval_math_pass1"), ("none", None)])
+def test_async_resume_agrees_on_eval_owner(async_ppo_module, configured, restored):
+    from queue import Queue
+
+    state = {"episode": 0, "global_step": 2, "data_loader_state_dict": {}, "best_eval_metric_key": restored}
+    coordinator = async_ppo_module.PPOTrainerAsync.__new__(async_ppo_module.PPOTrainerAsync)
+    coordinator.trainer_actor = MagicMock()
+    coordinator.generator_actor = MagicMock()
+    coordinator.trainer_actor.init_checkpoint_states.remote.return_value = state
+    coordinator.fit()
+    call = coordinator.generator_actor.fit.remote.call_args.kwargs
+    assert call["best_metric_key"] == restored
+
+    generator = async_ppo_module.GenerateSamplesActor.__new__(async_ppo_module.GenerateSamplesActor)
+    generator._best_metric_key = configured
+    generator.args = SimpleNamespace(train=SimpleNamespace(num_episodes=0), eval=SimpleNamespace(steps=2))
+    generator.rollout_queue = Queue()
+    generator.eval_dataloader = object()
+    generator._last_eval_step = -1
+    generator.fit(**call)
+    trainer = async_ppo_module.TrainingActor.__new__(async_ppo_module.TrainingActor)
+    trainer.best_eval_metric_key = configured
+    trainer.restore_best_checkpoint_state(state)
+    assert generator._should_eval(2) == (trainer.best_eval_metric_key == "none")
