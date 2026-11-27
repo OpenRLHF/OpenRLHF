@@ -78,6 +78,7 @@ def _load_experience_maker():
     launcher.RayActorGroup = type("RayActorGroup", (), {})
     stubs["openrlhf.trainer.ray.launcher"] = launcher
     balancing = stubs["openrlhf.utils.seqlen_balancing"]
+    balancing.ceildiv = lambda a, b: -(a // -b)
     balancing.get_minimum_num_micro_batch_size = lambda *a, **k: None
     balancing.get_seqlen_balanced_partitions = lambda *a, **k: None
 
