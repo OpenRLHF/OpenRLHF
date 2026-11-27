@@ -5,8 +5,9 @@ Wraps vLLM as a local OpenAI-compatible HTTP server, collecting token-level
 traces (IDs, logprobs) for RL training. Supports multi-turn agents via the
 overridable run_agent() method.
 
-Delta-tokenization preserves prefix tokens across multi-turn calls within
-a session. Prefix stability is assumed (i.e. no BPE boundary merges).
+Sessions preserve the exact sampled tokens, including earlier reasoning that
+chat templates may remove from history. Requests must extend the same history
+with the returned assistant content and new feedback; edits need a new session.
 
 Usage:
     python -m openrlhf.cli.train_ppo \
@@ -19,6 +20,7 @@ import logging
 import socket
 import threading
 import time
+from copy import deepcopy
 from urllib.request import urlopen
 from uuid import uuid4
 
@@ -112,21 +114,52 @@ class AgentExecutor(AgentExecutorBase):
             include_logprobs = body.get("logprobs", False)
             top_logprobs = body.get("top_logprobs", 1)
 
-            # Session-aware delta tokenization: only new feedback is tokenized
             prompt_text = _apply_chat_template(executor.hf_tokenizer, messages, add_generation_prompt=True)
             full_prompt_ids = executor.hf_tokenizer.encode(prompt_text, add_special_tokens=False)
 
             buffer = executor._session_buffers.get(session_id)
-            if buffer is None:
+            if buffer is None or full_prompt_ids[: len(buffer)] == buffer:
                 prompt_token_ids = full_prompt_ids
             else:
-                # Prefix is assumed stable; reuse buffer and append delta
-                assert len(full_prompt_ids) >= len(buffer) and full_prompt_ids[: len(buffer)] == buffer, (
-                    f"Session {session_id}: prefix mismatch — "
-                    f"buffer({len(buffer)}) vs full_prompt({len(full_prompt_ids)})"
-                )
-                prompt_token_ids = buffer + full_prompt_ids[len(buffer) :]
-            executor._session_buffers[session_id] = list(prompt_token_ids)
+                previous = executor._token_traces[session_id][-1]
+                assistant_index = len(previous["messages"])
+                if messages[:assistant_index] != previous["messages"] or len(messages) <= assistant_index:
+                    raise HTTPException(status_code=400, detail="Session history changed; use a new session_id")
+                assistant = messages[assistant_index]
+                if (
+                    assistant.get("role") != "assistant"
+                    or assistant.get("content") != previous["completion_text"]
+                    or assistant.get("tool_calls")
+                    or assistant.get("reasoning_content")
+                    or assistant.get("name")
+                ):
+                    raise HTTPException(status_code=400, detail="Replay the returned assistant content unchanged")
+
+                # Locate the last reply's end in this render, without assuming a
+                # model-specific delimiter or re-encoding any sampled tokens.
+                marker = f"__openrlhf_boundary_{uuid4().hex}__"
+                marked_messages = deepcopy(messages)
+                marked_messages[assistant_index]["content"] += marker
+                marked_text = _apply_chat_template(executor.hf_tokenizer, marked_messages)
+                if marked_text.count(marker) != 1:
+                    raise HTTPException(status_code=400, detail="Chat template cannot locate the reply boundary")
+                prefix, suffix = marked_text.split(marker)
+                if prompt_text not in (prefix + suffix, prefix.rstrip() + suffix):
+                    raise HTTPException(status_code=400, detail="Chat template changed around the reply boundary")
+                delta_ids = executor.hf_tokenizer.encode(suffix, add_special_tokens=False)
+                eos_id = executor.hf_tokenizer.eos_token_id
+                sampled_ids = previous["completion_token_ids"]
+                if not delta_ids or eos_id is None or delta_ids[0] != eos_id:
+                    raise HTTPException(
+                        status_code=400, detail="Chat template must close the reply with its EOS token"
+                    )
+                if previous["finish_reason"] == "stop" and (not sampled_ids or sampled_ids[-1] != eos_id):
+                    raise HTTPException(status_code=400, detail="Cannot identify the sampled reply's EOS token")
+                # A sampled EOS already closes the reply. After a length stop,
+                # the template's closure instead belongs to observation.
+                if sampled_ids and sampled_ids[-1] == eos_id:
+                    delta_ids = delta_ids[1:]
+                prompt_token_ids = buffer + delta_ids
 
             remaining = executor.max_length - len(prompt_token_ids)
             if remaining <= 0:
@@ -145,8 +178,6 @@ class AgentExecutor(AgentExecutorBase):
             gen = output.outputs[0]
             gen_text = gen.text or ""
             gen_ids = list(gen.token_ids)
-
-            executor._session_buffers[session_id] = prompt_token_ids + gen_ids
 
             # Build OpenAI-format logprobs and trace logprobs in one pass
             logprobs_content = None
@@ -173,12 +204,15 @@ class AgentExecutor(AgentExecutorBase):
                     )
 
             trace = {
+                "messages": deepcopy(messages),
+                "completion_text": gen_text,
                 "prompt_token_ids": prompt_token_ids,
                 "completion_token_ids": gen_ids,
                 "finish_reason": gen.finish_reason or "stop",
             }
             if trace_logprobs is not None:
                 trace["logprobs"] = trace_logprobs
+            executor._session_buffers[session_id] = prompt_token_ids + gen_ids
             executor._token_traces.setdefault(session_id, []).append(trace)
 
             return {
