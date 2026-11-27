@@ -701,6 +701,7 @@ class DeepspeedStrategy(ABC):
         save_latest=True,
         metric_value=None,
         metric_key=None,
+        ema_model=None,
     ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         client_state = client_state or {}
@@ -763,6 +764,11 @@ class DeepspeedStrategy(ABC):
                     self.print(f"Deleted checkpoint {delete_dir} ({reason})")
 
         torch_dist_barrier_and_cuda_sync()
+        if ema_model is not None and self.stage != 3 and model.save_non_zero_checkpoint:
+            # Only parameters updated by moving_average differ from the initial EMA model.
+            ema = self._unwrap_model(ema_model)
+            averages = {name: self.ema_fp32[p].cpu() for name, p in ema.named_parameters() if p in self.ema_fp32}
+            client_state = {**client_state, "openrlhf_ema": {"steps": self.time_steps["ema"], "averages": averages}}
         model.save_checkpoint(save_dir, tag=tag, client_state=client_state, save_latest=save_latest)
 
         # Write metric after successful save to avoid orphaned metric files on crash.
@@ -780,6 +786,7 @@ class DeepspeedStrategy(ABC):
         load_optimizer_states=True,
         load_lr_scheduler_states=True,
         load_module_only=False,
+        ema_model=None,
     ):
         assert isinstance(model, deepspeed.DeepSpeedEngine)
         load_path, states = model.load_checkpoint(
@@ -793,4 +800,14 @@ class DeepspeedStrategy(ABC):
         if load_path is None:
             self.print(f"Warning: [deepspeed] No checkpoint found at {load_dir}, skipping checkpoint loading.")
             return None, {}
+        ema_state = states.pop("openrlhf_ema", None)
+        if ema_model is not None and self.stage != 3 and ema_state is not None:
+            ema = self._unwrap_model(ema_model)
+            self.ema_fp32.clear()
+            with torch.no_grad():
+                for name, average in ema_state["averages"].items():
+                    param = ema.get_parameter(name)
+                    self.ema_fp32[param] = average.to(param.device)
+                    param.copy_(self.ema_fp32[param])
+            self.time_steps["ema"] = ema_state["steps"]
         return load_path, states
