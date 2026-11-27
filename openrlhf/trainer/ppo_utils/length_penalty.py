@@ -6,7 +6,7 @@ Two types of length penalty are supported:
 2. ProRL Stop Properly Penalty: Penalizes truncated samples (finish_reason == "length")
 """
 
-from typing import List
+from typing import List, Optional
 
 from openrlhf.utils.logging_utils import init_logger
 
@@ -15,30 +15,37 @@ logger = init_logger(__name__)
 
 def apply_overlong_penalty(
     experiences: List,
-    max_new_tokens: int,
+    max_new_tokens: Optional[int],
     overlong_buffer_len: float,
     overlong_penalty_factor: float = 1.0,
+    max_len: Optional[int] = None,
 ) -> int:
     """
     DAPO-style overlong penalty based on response length.
 
-    Penalizes responses that exceed (max_new_tokens - overlong_buffer_len).
-    Formula: penalty = -min(exceed_len, buffer_len) / buffer_len * penalty_factor
+    Penalizes responses that exceed (budget - overlong_buffer_len) where budget
+    is ``max_new_tokens`` when set, or the per-sample generation limit
+    ``max_len - prompt_len`` otherwise.
 
     Args:
         experiences: List of Experience objects with rewards and info
-        max_new_tokens: Maximum generation length
-        overlong_buffer_len: Buffer length before max_new_tokens
+        max_new_tokens: Maximum generation length (uniform for all samples),
+            or None to derive per-sample limits from max_len.
+        overlong_buffer_len: Buffer length before the generation limit
         overlong_penalty_factor: Maximum penalty factor
+        max_len: Total sequence limit (prompt + response).  Required when
+            max_new_tokens is None.
 
     Returns:
         Number of samples that received penalty
     """
-    assert (
-        max_new_tokens >= overlong_buffer_len
-    ), f"max_new_tokens ({max_new_tokens}) must be >= overlong_buffer_len ({overlong_buffer_len})"
+    if max_new_tokens is not None:
+        assert (
+            max_new_tokens >= overlong_buffer_len
+        ), f"max_new_tokens ({max_new_tokens}) must be >= overlong_buffer_len ({overlong_buffer_len})"
+    else:
+        assert max_len is not None, "max_len is required when max_new_tokens is None"
 
-    expected_len = max_new_tokens - overlong_buffer_len
     total_penalized = 0
 
     for experience in experiences:
@@ -47,7 +54,17 @@ def apply_overlong_penalty(
 
         for j in range(batch_size):
             valid_response_length = response_lengths[j].item()
-            # Cap the exceed_len to overlong_buffer_len to prevent excessive penalty
+
+            if max_new_tokens is not None:
+                budget = max_new_tokens
+            else:
+                prompt_len = experience.total_length[j].item() - valid_response_length
+                budget = max(1, max_len - prompt_len)
+
+            if budget < overlong_buffer_len:
+                continue
+
+            expected_len = budget - overlong_buffer_len
             exceed_len = min(valid_response_length - expected_len, overlong_buffer_len)
 
             if exceed_len > 0:
@@ -124,12 +141,13 @@ def apply_length_penalties(experiences: List, args) -> None:
 
     # DAPO-style overlong penalty based on response length
     if getattr(args.reward, "overlong_buffer_len", None) is not None:
-        max_new_tokens = getattr(args.rollout, "max_new_tokens", None) or args.data.max_len
+        max_new_tokens = getattr(args.rollout, "max_new_tokens", None)
         num_penalized = apply_overlong_penalty(
             experiences=experiences,
             max_new_tokens=max_new_tokens,
             overlong_buffer_len=args.reward.overlong_buffer_len,
             overlong_penalty_factor=getattr(args.reward, "overlong_penalty_factor", 1.0),
+            max_len=args.data.max_len,
         )
         logger.info(
             f"[DAPO Overlong Penalty] {num_penalized}/{total_samples} samples penalized, "
