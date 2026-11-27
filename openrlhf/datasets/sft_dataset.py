@@ -12,8 +12,9 @@ def preprocess_data(data, input_template=None, input_key="input", output_key=Non
             prompt_message = data[input_key]
             response_message = data[output_key]
 
-            if isinstance(prompt_message, str) and isinstance(response_message, str):
+            if isinstance(prompt_message, str):
                 prompt_message = [{"role": "user", "content": prompt_message}]
+            if isinstance(response_message, str):
                 response_message = [{"role": "assistant", "content": response_message}]
 
             prompt = apply_chat_template(prompt_message, tokenize=False, add_generation_prompt=True)
