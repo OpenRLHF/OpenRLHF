@@ -12,6 +12,37 @@ from openrlhf.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
 
+_warned_missing_action_mask = False
+
+
+def _get_overlong_response_lengths(experience):
+    global _warned_missing_action_mask
+
+    action_mask = getattr(experience, "action_mask", None)
+    if action_mask is not None:
+        response_lengths = action_mask.sum(dim=-1)
+    else:
+        # Falling back to response_length counts every generated token, including
+        # non-action tokens such as tool responses. This is the pre-fix behavior and
+        # is only correct for non-agentic runs. A missing action_mask during agentic
+        # training is most likely a misconfiguration, so surface it once.
+        if not _warned_missing_action_mask:
+            logger.warning(
+                "action_mask is not set on experiences; overlong penalty falls back to "
+                "response_length, which counts non-action tokens (e.g. tool responses). "
+                "If this is an agentic run, ensure action_mask is populated."
+            )
+            _warned_missing_action_mask = True
+        response_lengths = getattr(experience, "response_length", None)
+
+    if response_lengths is None:
+        raise ValueError("Experience must have either 'action_mask' or 'response_length' populated.")
+
+    if response_lengths.dim() == 0:
+        response_lengths = response_lengths.unsqueeze(0)
+
+    return response_lengths
+
 
 def apply_overlong_penalty(
     experiences: List,
@@ -23,6 +54,8 @@ def apply_overlong_penalty(
     DAPO-style overlong penalty based on response length.
 
     Penalizes responses that exceed (max_new_tokens - overlong_buffer_len).
+    Uses action_mask when available so non-action tokens such as tool responses
+    do not count toward the trainable response length.
     Formula: penalty = -min(exceed_len, buffer_len) / buffer_len * penalty_factor
 
     Args:
@@ -42,7 +75,7 @@ def apply_overlong_penalty(
     total_penalized = 0
 
     for experience in experiences:
-        response_lengths = experience.response_length
+        response_lengths = _get_overlong_response_lengths(experience)
         batch_size = len(response_lengths)
 
         for j in range(batch_size):
