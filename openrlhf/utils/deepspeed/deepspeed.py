@@ -78,6 +78,7 @@ class DeepspeedStrategy(ABC):
             assert self.param_dtype == "bf16", "BF16 is required for tensor parallel training"
 
         self.time_steps = defaultdict(int)
+        self.ema_fp32 = {}  # EMA parameter -> its running average in fp32
 
     def setup_distributed(self, timeout=timedelta(minutes=60)) -> None:
         if self.full_determinism:
@@ -502,8 +503,13 @@ class DeepspeedStrategy(ABC):
                 for param, param_ema in zip(model.parameters(), model_ema.parameters()):
                     if param.requires_grad:
                         if self.stage != 3:
-                            data = param.data.to(device)
-                            param_ema.data.copy_((1 - beta) * data + beta * param_ema.data)
+                            # A bf16/fp16 EMA loses most of each step to rounding, so the
+                            # average is kept in fp32 and the EMA model stores its rounding.
+                            if param_ema not in self.ema_fp32:
+                                self.ema_fp32[param_ema] = param_ema.data.to(device, torch.float32)
+                            average = self.ema_fp32[param_ema]
+                            average.mul_(beta).add_(param.data.to(device, torch.float32), alpha=1 - beta)
+                            param_ema.data.copy_(average)
                         else:
                             # TODO: use prefiltering for efficiency
                             params_to_fetch = _z3_params_to_fetch([param, param_ema])
