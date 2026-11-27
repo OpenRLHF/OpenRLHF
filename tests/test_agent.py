@@ -88,10 +88,27 @@ def agent_modules(monkeypatch):
     return modules
 
 
-@pytest.mark.parametrize("finish_reasons", [("stop",), ("length",), ("stop", "stop"), ("stop", "length")])
+@pytest.mark.parametrize(
+    "finish_reasons,feedback,done_at_end,expected_truncated",
+    [
+        (("stop",), " ", True, False),
+        (("length",), " ", True, True),
+        (("stop", "stop"), " ", True, False),
+        (("stop", "length"), " ", True, True),
+        # Six prompt tokens + two action tokens leave 56 tokens for feedback.
+        (("stop",), " " * 56, False, True),
+        (("stop",), " " * 57, False, True),
+        (("stop",), " " * 56, True, False),
+        (("stop",), " " * 57, True, False),
+        (("stop", "stop"), " " * 27, False, True),
+        (("stop", "stop"), " " * 28, False, True),
+    ],
+)
 @pytest.mark.parametrize("with_logprobs", [False, True])
 @pytest.mark.parametrize("penalty_coef", [0.0, 0.5, -0.5])
-def test_multiturn_truncation_reaches_reward_penalty(agent_modules, finish_reasons, with_logprobs, penalty_coef):
+def test_multiturn_truncation_reaches_reward_penalty(
+    agent_modules, finish_reasons, feedback, done_at_end, expected_truncated, with_logprobs, penalty_coef
+):
     agent, samples, penalties = agent_modules
 
     class Environment(agent.AgentInstanceBase):
@@ -102,8 +119,8 @@ def test_multiturn_truncation_reaches_reward_penalty(agent_modules, finish_reaso
             self.steps += 1
             return {
                 "rewards": torch.tensor(1.0),
-                "environment_feedback": " ",
-                "done": self.steps == len(finish_reasons),
+                "environment_feedback": feedback,
+                "done": done_at_end and self.steps == len(finish_reasons),
             }
 
     class Engine:
@@ -138,7 +155,6 @@ def test_multiturn_truncation_reaches_reward_penalty(agent_modules, finish_reaso
             engine,
         )
     )
-    expected_truncated = finish_reasons[-1] == "length"
     assert response.get("truncated", False) is expected_truncated
     assert engine.calls == len(finish_reasons)
     assert response["reward"] == len(finish_reasons)
@@ -149,6 +165,15 @@ def test_multiturn_truncation_reaches_reward_penalty(agent_modules, finish_reaso
     assert experience.sequences.shape[1] <= 64
     if with_logprobs:
         assert experience.rollout_log_probs.shape == experience.action_mask.shape
+        mask = experience.action_mask.bool()
+        assert torch.allclose(
+            experience.rollout_log_probs[mask], torch.full_like(experience.rollout_log_probs[mask], -0.1)
+        )
+        assert (experience.rollout_log_probs[~mask] == 0).all()
+    else:
+        assert experience.rollout_log_probs is None
+    for start, end in response["action_ranges"]:
+        assert response["observation_tokens"][start:end] == [65] * (end - start)
 
     count = penalties.apply_stop_properly_penalty([experience], penalty_coef)
     expected_reward = float(len(finish_reasons))
