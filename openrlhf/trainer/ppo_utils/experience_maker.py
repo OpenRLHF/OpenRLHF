@@ -384,23 +384,20 @@ class RemoteExperienceMaker:
         - advantages: Tensor of shape (batch_size, response_size)
         - returns: Tensor of shape (batch_size, response_size)
         """
-        lastgaelam = 0
-        advantages_reversed = []
-        response_length = rewards.size(1)
-
-        # Mask invalid responses
-        if action_mask is not None:
-            values = action_mask * values
-            rewards = action_mask * rewards
-
-        for t in reversed(range(response_length)):
-            nextvalues = values[:, t + 1] if t < response_length - 1 else 0.0
-            delta = rewards[:, t] + gamma * nextvalues - values[:, t]
-            lastgaelam = delta + gamma * lambd * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1], dim=1)
-        returns = advantages + values
-        return advantages.detach(), returns
+        masked = torch.zeros_like(values, dtype=torch.bool) if action_mask is None else ~action_mask.bool()
+        values = values.to(torch.promote_types(values.dtype, rewards.dtype))
+        bootstrap = values.new_zeros(values.size(0))
+        weighted_values = (1 - lambd) * values
+        returns_reversed = []
+        for t in reversed(range(rewards.size(1))):
+            ret = rewards[:, t] + gamma * bootstrap
+            # The lambda-return bootstraps from (1 - lambda) * V + lambda * R
+            # at the next action. Observation tokens do not advance this recurrence.
+            bootstrap = torch.where(masked[:, t], bootstrap, weighted_values[:, t] + lambd * ret)
+            returns_reversed.append(ret)
+        returns = torch.stack(returns_reversed[::-1], dim=1)
+        advantages = (returns - values).masked_fill(masked, 0)
+        return advantages.detach(), returns.masked_fill(masked, 0)
 
     @torch.no_grad()
     def get_cumulative_returns(
