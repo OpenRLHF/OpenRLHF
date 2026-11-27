@@ -13,7 +13,7 @@ from openrlhf.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
-def _collect_prompt_batch(dataloader_iter, num_prompts: int):
+def _collect_prompt_batch(dataloader_iter, num_prompts: int, datasources=None):
     """Draw up to `num_prompts` items from the prompt dataloader.
 
     Returns an exhaustion flag indicating whether the iterator is drained *after*
@@ -25,11 +25,13 @@ def _collect_prompt_batch(dataloader_iter, num_prompts: int):
 
     while len(prompts) < num_prompts:
         try:
-            _, batch_prompts, batch_labels, batch_images = next(dataloader_iter)
+            batch_sources, batch_prompts, batch_labels, batch_images = next(dataloader_iter)
             remaining = num_prompts - len(prompts)
             prompts.extend(batch_prompts[:remaining])
             labels.extend(batch_labels[:remaining])
             images.extend(batch_images[:remaining])
+            if datasources is not None:
+                datasources.extend(batch_sources[:remaining])
         except StopIteration:
             exhausted = True
             break
@@ -73,6 +75,7 @@ class SamplesGenerator:
                     dataloader_iter=self._eval_dataloader_iter,
                     num_prompts=self.args.rollout.batch_size,
                     dynamic_filtering=False,
+                    record_datasource=True,
                     **generate_kwargs,
                 )
                 all_experiences.extend(experiences)
@@ -138,7 +141,7 @@ class SamplesGenerator:
         return rollout_samples, filter_pass_rate, prompts_consumed, exhausted
 
     def _generate_vllm(
-        self, dataloader_iter, num_prompts: int, dynamic_filtering, **generate_kwargs
+        self, dataloader_iter, num_prompts: int, dynamic_filtering, record_datasource=False, **generate_kwargs
     ) -> Tuple[List[Experience], int, bool]:
         """Generate a batch of Experiences with optional reward filtering.
 
@@ -148,12 +151,14 @@ class SamplesGenerator:
         prompts_consumed = 0
         accepted_experiences: List[Experience] = []
 
-        prompts, labels, images, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts)
+        datasources = [] if record_datasource else None
+        prompts, labels, images, exhausted = _collect_prompt_batch(dataloader_iter, num_prompts, datasources)
         if not prompts:
             return [], prompts_consumed, True
 
         target_num_prompts = len(prompts)
         pending_refs = self._dispatch_prompts_to_vllm(prompts, labels, images=images, **generate_kwargs)
+        source_by_ref = dict(zip(pending_refs, datasources, strict=True)) if record_datasource else {}
         prompts_consumed += target_num_prompts
 
         pbar = tqdm(range(target_num_prompts), desc="Generate samples")
@@ -164,6 +169,11 @@ class SamplesGenerator:
                 experiences = [
                     self._process_response_into_experience(response, **generate_kwargs) for response in ray.get(ref)
                 ]
+
+                if record_datasource:
+                    source = source_by_ref.pop(ref)
+                    for experience in experiences:
+                        experience.datasources = [source]
 
                 # Drop experiences if the average score falls outside the allowed range.
                 if dynamic_filtering and all(e.scores is not None for e in experiences):

@@ -93,7 +93,7 @@ class GenerateSamplesActor:
         eval_kwargs["n_samples_per_prompt"] = self.args.eval.n_samples_per_prompt
 
         samples_list = self.samples_generator.generate_eval_samples(**eval_kwargs)
-        logs = compute_eval_metrics(self.eval_dataloader, samples_list, self.args.eval.n_samples_per_prompt)
+        logs = compute_eval_metrics(samples_list, self.args.eval.n_samples_per_prompt)
         logger.info(f"Async evaluation completed: {logs}")
         return logs
 
