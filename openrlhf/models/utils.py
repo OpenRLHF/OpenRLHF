@@ -125,7 +125,7 @@ def compute_approx_kl(
     grad_surrogate = w * (log_ratio**2 / 2.0)
 
     # Straight-through: forward value = chosen estimator, backward gradient = ∇grad_surrogate.
-    return value.detach() + grad_surrogate - grad_surrogate.detach()
+    return value.detach() + (grad_surrogate - grad_surrogate.detach())
 
 
 def compute_reward(
