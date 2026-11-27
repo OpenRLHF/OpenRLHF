@@ -214,6 +214,8 @@ def masked_normalize(tensor: torch.Tensor, mask: torch.Tensor, dim: int = 1, eps
 
 @torch.compile
 def compute_entropy(logits: torch.Tensor):
-    pd = torch.nn.functional.softmax(logits, dim=-1)
-    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+    log_probs = F.log_softmax(logits, dim=-1)
+    pd = log_probs.exp()
+    # Avoid cancellation from common logit offsets and preserve the 0 * log(0) limit.
+    entropy = -torch.sum(pd * log_probs.masked_fill(pd == 0, 0.0), dim=-1)
     return entropy
