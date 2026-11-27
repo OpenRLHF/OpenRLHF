@@ -106,7 +106,15 @@ def compute_approx_kl(
         # Below -10, k3 already exceeds the final cap. Bound before exp to
         # avoid an overflowing derivative (0 * inf) after the final clamp.
         k3_log_ratio = log_ratio.clamp(min=-10)
-        value = (-k3_log_ratio).exp() - 1 + k3_log_ratio
+        # Near zero, the Taylor expansion avoids cancellation in both the value and gradient.
+        # Zero the other inputs before squaring so the unused branch stays finite.
+        near_zero = k3_log_ratio.abs() < 1e-3
+        small_ratio = torch.where(near_zero, k3_log_ratio, 0.0)
+        value = torch.where(
+            near_zero,
+            0.5 * small_ratio.square() * (1 - small_ratio / 3),
+            (-k3_log_ratio).expm1() + k3_log_ratio,
+        )
     else:
         raise ValueError(f"Unknown kl_estimator: {kl_estimator}")
 
