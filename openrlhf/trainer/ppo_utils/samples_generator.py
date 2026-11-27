@@ -38,7 +38,14 @@ def _collect_prompt_batch(dataloader_iter, num_prompts: int):
 
 
 class SamplesGenerator:
-    """Stateless sample generator: pulls prompts and dispatches to rollout workers."""
+    """Sample generator: pulls prompts and dispatches to rollout workers.
+
+    Stateful across calls when ``vllm_generate_batch_size > rollout.batch_size``:
+    ``_sample_buffer`` holds generated-but-untrained Experiences, and
+    ``_dataloader_iter`` advances ahead of the training cursor.  Both must be
+    persisted alongside the prompt dataloader state so checkpoints resume at
+    the exact training boundary rather than silently dropping buffered rollouts.
+    """
 
     def __init__(
         self,
@@ -56,6 +63,35 @@ class SamplesGenerator:
 
         self.prompts_dataloader = prompts_dataloader
         self.eval_dataloader = eval_dataloader
+
+    # ── Checkpoint state ──
+
+    def state_dict(self) -> dict:
+        """Serialise the generator's internal buffer for checkpointing."""
+        return {
+            "sample_buffer": list(getattr(self, "_sample_buffer", [])),
+            # ``_dataloader_iter is None`` is the authoritative exhaustion flag:
+            # ``generate_samples`` sets it when the iterator runs out.
+            "dataloader_exhausted": getattr(self, "_dataloader_iter", None) is None,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore the generator's buffer and iterator cursor from a checkpoint.
+
+        The prompt dataloader must already have been restored to its checkpoint
+        cursor — this method only layers the buffer and exhaustion bit on top.
+        When ``state`` is ``None`` (old checkpoints) both fields reset to
+        their fresh defaults so the generator behaves as if newly constructed.
+        """
+        if state is None:
+            self._sample_buffer = []
+            self._dataloader_iter = iter(self.prompts_dataloader)
+            return
+        self._sample_buffer = list(state.get("sample_buffer", []))
+        if state.get("dataloader_exhausted", False):
+            self._dataloader_iter = iter(())
+        else:
+            self._dataloader_iter = iter(self.prompts_dataloader)
 
     @torch.no_grad()
     def generate_eval_samples(self, **generate_kwargs) -> List[Experience]:

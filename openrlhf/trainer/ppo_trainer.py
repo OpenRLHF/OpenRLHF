@@ -443,6 +443,7 @@ class BasePPOTrainer(ABC):
             "global_step": 0,
             "total_consumed_prompts": 0,
             "data_loader_state_dict": {},
+            "generator_state": None,
         }
 
 
@@ -516,6 +517,10 @@ class PPOTrainer(BasePPOTrainer):
             state_dict = checkpoint_states["data_loader_state_dict"]
             if state_dict:
                 self.prompts_dataloader.load_state_dict(state_dict)
+            # Restore oversampling buffer so buffered-but-untrained rollouts
+            # are not silently dropped when the generation batch is larger
+            # than one training chunk.
+            self.samples_generator.load_state_dict(checkpoint_states.get("generator_state"))
 
         for episode in range(start_episode, self.args.train.num_episodes):
             dataset_length = len(self.prompts_dataloader)
@@ -556,6 +561,9 @@ class PPOTrainer(BasePPOTrainer):
                     "global_step": global_step,
                     "total_consumed_prompts": total_consumed_prompts,
                     "data_loader_state_dict": self.prompts_dataloader.state_dict(),
+                    "generator_state": (
+                        self.samples_generator.state_dict() if hasattr(self.samples_generator, "state_dict") else None
+                    ),
                 }
                 self.save_logs_and_checkpoints(global_step, status, client_states)
 
