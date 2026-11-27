@@ -176,3 +176,64 @@ def test_restore_checkpoint_metric_compatibility(ppo_module, state, best, latest
     trainer.restore_best_checkpoint_state(state)
     assert trainer.best_eval_metric_value == best
     assert trainer._latest_eval_metric_value == latest
+
+
+@pytest.mark.parametrize("freezing_steps", [-1, 0, 2])
+@pytest.mark.parametrize("enable_sleep", [False, True])
+@pytest.mark.parametrize("with_critic", [False, True])
+def test_actor_warmup_does_not_retain_experiences(ppo_module, freezing_steps, enable_sleep, with_critic):
+    import torch
+
+    trainer = ppo_module.BasePPOTrainer.__new__(ppo_module.BasePPOTrainer)
+    trainer.args = SimpleNamespace(
+        train=SimpleNamespace(dynamic_batch_enable=False),
+        critic=SimpleNamespace(freezing_steps=freezing_steps),
+        ds=SimpleNamespace(enable_sleep=enable_sleep),
+    )
+    trainer.tokenizer = MagicMock()
+    trainer.experience_maker = MagicMock()
+    trainer._compute_rollout_stats = lambda _: {}
+    trainer.vllm_engines = None
+    trainer.kl_ctl = SimpleNamespace(value=0.1)
+
+    groups = []
+    for _ in range(2):
+        group = MagicMock()
+        group.buffer = []
+        group.trained_batches = []
+        group.events = []
+
+        def append(*, method_name, experience, group=group):
+            assert method_name == "append"
+            group.buffer.extend(experience)
+            return []
+
+        def run(*, method_name, group=group, **kwargs):
+            group.events.append(method_name)
+            if method_name == "fit":
+                group.trained_batches.append([exp.info["reward"].item() for exp in group.buffer])
+                group.buffer.clear()
+                return [{}]
+            return []
+
+        group.async_run_method_batch.side_effect = append
+        group.async_run_method.side_effect = run
+        groups.append(group)
+    actor, critic = groups
+    trainer.actor_model_group = actor
+    trainer.critic_model_group = critic if with_critic else None
+
+    for step in range(5):
+        experience = SimpleNamespace(sequences=torch.tensor([[1, 2]]), info={"reward": torch.tensor([float(step)])})
+        trainer.experience_maker.make_experience_batch.return_value = [experience]
+        _, next_step = trainer.train_step(["rollout"], step)
+        assert next_step == step + 1
+        assert not actor.buffer, "Frozen rounds must not accumulate actor experiences"
+        assert not critic.buffer
+
+    expected_actor = [[float(step)] for step in range(5) if step > freezing_steps]
+    assert actor.trained_batches == expected_actor
+    assert critic.trained_batches == ([[float(step)] for step in range(5)] if with_critic else [])
+    fit_events = ["reload_states", "fit", "offload_states"] if enable_sleep else ["fit"]
+    assert actor.events == fit_events * len(expected_actor)
+    assert critic.events == fit_events * (5 if with_critic else 0)
