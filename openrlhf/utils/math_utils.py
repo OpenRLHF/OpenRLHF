@@ -112,6 +112,7 @@ def _strip_string(string: str) -> str:
         if len(string.split("=")[0]) <= 2:
             string = string.split("=")[1]
     string = _fix_sqrt(string)
+    string = _inject_implicit_mixed_number(string)
     string = string.replace(" ", "")
     string = _fix_fracs(string)
     if string == "0.5":
@@ -176,8 +177,8 @@ def _str_to_int(value: str) -> int:
 
 
 def _inject_implicit_mixed_number(step: str) -> str:
-    pattern = re.compile(r"([0-9]) +([0-9])")
-    return pattern.sub(r"\1+\2", step)
+    pattern = re.compile(r"(-?[0-9]+) +([0-9])")
+    return pattern.sub(lambda match: match[1] + ("-" if match[1].startswith("-") else "+") + match[2], step)
 
 
 def _normalize(expr: str | None) -> str | None:
