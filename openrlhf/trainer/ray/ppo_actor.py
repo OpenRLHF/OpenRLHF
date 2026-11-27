@@ -521,7 +521,7 @@ class PolicyModelActor(BaseModelActor):
         ckpt_path = os.path.join(args.ckpt.path, "_actor")
         if args.ckpt.load_enable and os.path.exists(ckpt_path):
             strategy.print(f"Loading the checkpoint: {ckpt_path}")
-            _, states = strategy.load_ckpt(self.actor.model, ckpt_path)
+            _, states = strategy.load_ckpt(self.actor.model, ckpt_path, ema_model=self.ema_model)
             self.checkpoint_states = states
 
         # initial offload
@@ -618,6 +618,7 @@ class PolicyModelActor(BaseModelActor):
                 client_states,
                 metric_value=metric_value,
                 metric_key=metric_key,
+                ema_model=self.ema_model,
             )
         if self.save_hf_ckpt:
             save_path = os.path.join(args.ckpt.path, f"{tag}_hf")
