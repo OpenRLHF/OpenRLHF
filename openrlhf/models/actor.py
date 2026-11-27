@@ -94,6 +94,7 @@ class Actor(nn.Module):
     ) -> None:
         super().__init__()
         self.temperature = temperature
+        self.packing_samples = packing_samples
 
         if isinstance(pretrain_or_model, str):
             # Support multiple attention mechanism implementations
@@ -213,8 +214,6 @@ class Actor(nn.Module):
             if self.is_vlm:
                 self._vlm_config = self.model.config
 
-            # packing samples using Flash Attention 2
-            self.packing_samples = packing_samples
         else:
             self.model = pretrain_or_model
 
