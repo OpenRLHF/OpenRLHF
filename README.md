@@ -4,21 +4,21 @@
 <div align="center">
 <p align="center">
       <a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
-        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/OpenRLHF/OpenRLHF" />
+        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/OpenRLHF/OpenRLHF?cacheSeconds=86400" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/issues">
-        <img alt="Issues" src="https://img.shields.io/github/issues/OpenRLHF/OpenRLHF?color=0088ff" />
+        <img alt="Issues" src="https://img.shields.io/github/issues/OpenRLHF/OpenRLHF?color=0088ff&cacheSeconds=86400" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/discussions">
-        <img alt="Issues" src="https://img.shields.io/github/discussions/OpenRLHF/OpenRLHF?color=0088ff" />
+        <img alt="Discussions" src="https://img.shields.io/github/discussions/OpenRLHF/OpenRLHF?color=0088ff&cacheSeconds=86400" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/pulls">
-        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/OpenRLHF/OpenRLHF?color=0088ff" />
+        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/OpenRLHF/OpenRLHF?color=0088ff&cacheSeconds=86400" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/stargazers">
         <img alt="GitHub stars" src="https://img.shields.io/github/stars/OpenRLHF/OpenRLHF?color=ccf" />
       </a>
-      <a href="https://deepwiki.com/OpenRLHF/OpenRLHF"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+      <a href="https://deepwiki.com/OpenRLHF/OpenRLHF"><img alt="Ask DeepWiki" src="https://img.shields.io/badge/Ask-DeepWiki-0088ff" /></a>
       <br>
       <em>Open-source / Comprehensive / Lightweight / Easy-to-use</em>
     </p>
@@ -517,7 +517,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 > [!NOTE]
 > **Troubleshooting GPU index errors**: Set `export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` if you encounter DeepSpeed GPU device setup issues.
 
-📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/usage.html)
+📚 **More Examples**: See [examples/scripts](./examples/scripts/) and [Documentation](https://openrlhf.readthedocs.io/en/latest/)
 
 ---
 
