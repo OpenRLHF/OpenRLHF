@@ -289,3 +289,131 @@ def test_seq_mean_token_mean_weighs_every_sequence_the_same():
     torch.testing.assert_close(loss, torch.tensor(-1.5))
     loss.backward()
     torch.testing.assert_close(logp.grad, torch.tensor([[-0.5, -0.5], [-0.5, 0.0]]))
+
+
+@pytest.mark.parametrize(
+    "kind,token_level",
+    [("sft", True), ("sft", False), ("value", True), ("value", False), ("ppo", True), ("ppo", False), ("gspo", False)],
+)
+@pytest.mark.parametrize("normalizer", ["local", "python", "tensor"])
+def test_empty_normalizer_training_step_has_zero_loss_and_gradients(kind, token_level, normalizer):
+    with torch.random.fork_rng():
+        torch.manual_seed(17)
+        model = torch.nn.Linear(3, 5)
+        inputs = torch.randn(2, 4, 3)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    before = [p.detach().clone() for p in model.parameters()]
+    output = model(inputs)
+    mask = torch.zeros(output.shape[:2])
+    info = {} if normalizer == "local" else get_loss_batch_info(object(), mask)
+    if normalizer == "python":
+        info = {key: value.item() if torch.is_tensor(value) else value for key, value in info.items()}
+
+    if kind == "value":
+        values = output[..., 0]
+        loss = _loss_module.ValueLoss(clip_eps=0.2, token_level_loss=token_level)(
+            values, values.detach(), torch.ones_like(values), mask, **info
+        )
+    else:
+        logps = output.log_softmax(-1)[..., 0]
+        if kind == "sft":
+            loss = _loss_module.SFTLoss(token_level_loss=token_level)(logps, mask, **info)
+        else:
+            loss, clip_ratio, ppo_kl, _, _ = PolicyLoss(policy_loss_type=kind, token_level_loss=token_level)(
+                logps, logps.detach() + 0.1, torch.ones_like(logps), mask, **info
+            )
+            torch.testing.assert_close(clip_ratio, torch.zeros_like(clip_ratio))
+            torch.testing.assert_close(ppo_kl, torch.zeros_like(ppo_kl))
+
+    torch.testing.assert_close(loss, torch.zeros_like(loss))
+    loss.backward()
+    for parameter in model.parameters():
+        torch.testing.assert_close(parameter.grad, torch.zeros_like(parameter))
+    optimizer.step()
+    for parameter, expected in zip(model.parameters(), before):
+        torch.testing.assert_close(parameter, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
+@pytest.mark.parametrize("global_normalizer", [False, True])
+def test_empty_normalizer_rows_do_not_poison_nonempty_sequences(dtype, global_normalizer):
+    values = torch.tensor([[1.0, 3.0], [5.0, 7.0]], dtype=dtype, requires_grad=True)
+    mask = torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=dtype)
+    info = get_loss_batch_info(object(), mask) if global_normalizer else {}
+    loss = aggregate_loss(values, mask, token_level_loss=False, **info)
+    torch.testing.assert_close(loss, torch.tensor(2.0, dtype=loss.dtype))
+    loss.backward()
+    torch.testing.assert_close(values.grad, torch.tensor([[0.5, 0.5], [0.0, 0.0]], dtype=dtype))
+
+
+@pytest.mark.parametrize("token_level", [False, True])
+@pytest.mark.parametrize("python_normalizer", [False, True])
+def test_empty_normalizer_keeps_fractional_accumulation_normalizers(token_level, python_normalizer):
+    parameter = torch.nn.Parameter(torch.tensor(0.75, dtype=torch.float64))
+    optimizer = torch.optim.SGD([parameter], lr=0.1)
+    masks = [torch.tensor([[1.0, 0.0]])] + [torch.zeros(1, 2) for _ in range(3)]
+    losses = []
+    for mask, info in iter_grad_accum_global_norm(iter(masks), object(), 4, lambda item: item):
+        assert info["batch_num_tokens"].item() == 0.25
+        assert info["global_batch_size"].item() == 0.25
+        if python_normalizer:
+            info = {key: value.item() if torch.is_tensor(value) else value for key, value in info.items()}
+        loss = aggregate_loss(
+            parameter * torch.tensor([[2.0, 3.0]], dtype=torch.float64), mask, token_level_loss=token_level, **info
+        )
+        losses.append(loss.detach() / 4)
+        (loss / 4).backward()
+    torch.testing.assert_close(sum(losses), torch.tensor(1.5, dtype=torch.float64))
+    torch.testing.assert_close(parameter.grad, torch.tensor(2.0, dtype=torch.float64))
+    optimizer.step()
+    torch.testing.assert_close(parameter, torch.tensor(0.55, dtype=torch.float64))
+
+
+@pytest.mark.parametrize("token_level", [False, True])
+def test_empty_normalizer_local_shard_preserves_positive_global_normalization(token_level):
+    full = torch.tensor([[1.0, 2.0], [3.0, 5.0]], dtype=torch.float64, requires_grad=True)
+    sharded = full.detach().clone().requires_grad_()
+    mask = torch.tensor([[0.0, 0.0], [1.0, 1.0]])
+    info = get_loss_batch_info(object(), mask)
+    expected = aggregate_loss(full, mask, token_level_loss=token_level, **info)
+    info["dp_size"] = 2
+    losses = [
+        aggregate_loss(sharded[i : i + 1], mask[i : i + 1], token_level_loss=token_level, **info) for i in range(2)
+    ]
+    actual = sum(losses) / 2  # gradient averaging across two DP shards
+    torch.testing.assert_close(losses[0], torch.zeros_like(losses[0]))
+    torch.testing.assert_close(actual, expected)
+    actual.backward()
+    expected.backward()
+    torch.testing.assert_close(sharded.grad, full.grad)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+@pytest.mark.parametrize("dim", [None, 0, -1])
+def test_empty_normalizer_masked_mean_keeps_positive_fractional_weights(dtype, dim):
+    for mask in (torch.zeros(2, 2, dtype=dtype), torch.tensor([[0.25, 0.0], [0.0, 0.0]], dtype=dtype)):
+        values = torch.tensor([[2.0, 3.0], [4.0, 5.0]], dtype=dtype, requires_grad=True)
+        result = _loss_module.masked_mean(values, mask, dim)
+        expected = torch.zeros_like(result)
+        if mask.sum() > 0:
+            if dim is None:
+                expected.fill_(2.0)
+            else:
+                expected[0] = 2.0
+        torch.testing.assert_close(result, expected)
+        result.sum().backward()
+        torch.testing.assert_close(values.grad, (mask > 0).to(dtype))
+
+
+@pytest.mark.parametrize("token_level", [False, True])
+@pytest.mark.parametrize("global_normalizer", [False, True])
+def test_empty_normalizer_does_not_hide_nan_at_valid_tokens(token_level, global_normalizer):
+    values = torch.tensor([[float("nan"), 1.0]])
+    mask = torch.ones_like(values)
+    info = get_loss_batch_info(object(), mask) if global_normalizer else {}
+    assert torch.isnan(aggregate_loss(values, mask, token_level_loss=token_level, **info))
+
+
+def test_empty_normalizer_masked_mean_without_mask_keeps_native_mean():
+    values = torch.tensor([[1.0, 3.0], [5.0, 7.0]], requires_grad=True)
+    torch.testing.assert_close(_loss_module.masked_mean(values, None), values.mean())
