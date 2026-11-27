@@ -413,7 +413,7 @@ class RemoteExperienceMaker:
         Input:
         - rewards: Tensor of shape (batch_size, response_size)
         - action_mask: Tensor of shape (batch_size, response_size), binary mask
-        - gamma: discount factor
+        - gamma: discount factor; with a mask, it advances only on action tokens
 
         Output:
         - returns: Tensor of shape (batch_size, response_size)
@@ -422,13 +422,15 @@ class RemoteExperienceMaker:
         returns = torch.zeros_like(rewards)
         cumulative_return = torch.zeros(rewards.size(0), device=rewards.device)
 
-        # Mask invalid responses if action_mask is provided
         if action_mask is not None:
+            action_mask = action_mask.bool()
             rewards = action_mask * rewards
-
-        # Calculate returns by accumulating discounted rewards
         for t in reversed(range(response_length)):
-            cumulative_return = rewards[:, t] + gamma * cumulative_return
+            next_return = rewards[:, t] + gamma * cumulative_return
+            if action_mask is None:
+                cumulative_return = next_return
+            else:
+                cumulative_return = torch.where(action_mask[:, t], next_return, cumulative_return)
             returns[:, t] = cumulative_return
 
         return returns
