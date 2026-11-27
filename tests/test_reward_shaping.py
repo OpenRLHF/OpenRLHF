@@ -147,3 +147,33 @@ def test_flash_reinforce_centers_on_the_rollout_batch_mean_without_whitening(mak
     result = maker.compute_advantages_and_returns([experience])[0]
     torch.testing.assert_close(result.advantages, torch.tensor([0.75, -0.25, -0.25, -0.25])[:, None].expand(-1, 2))
     torch.testing.assert_close(result.advantages, result.returns)
+
+
+@pytest.mark.parametrize(
+    "num_samples, micro_batch_size, num_actors",
+    [(1024, 16, 4), (672, 16, 4), (100, 8, 4), (5, 1, 4), (7, 16, 2), (3, 2, 1)],
+)
+def test_static_rollout_split_gives_every_rank_the_same_number_of_batches(
+    maker_module, monkeypatch, num_samples, micro_batch_size, num_actors
+):
+    monkeypatch.setattr(maker_module, "ceildiv", lambda a, b: -(a // -b), raising=False)
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    maker.tokenizer = SimpleNamespace(pad_token_id=0)
+    maker.args = SimpleNamespace(
+        train=SimpleNamespace(dynamic_batch_enable=False),
+        actor=SimpleNamespace(num_nodes=1, num_gpus_per_node=num_actors),
+        ds=SimpleNamespace(ring_attn_size=1, tensor_parallel_size=1),
+        rollout=SimpleNamespace(micro_batch_size=micro_batch_size),
+    )
+    samples = [Experience(sequences=torch.tensor([[i]])) for i in range(num_samples)]
+
+    batches = maker.split_rollout_samples(samples)
+
+    # RayActorGroup.async_run_method_batch hands each rank one contiguous chunk of batches.
+    per_rank = len(batches) // num_actors
+    assert len(batches) == per_rank * num_actors
+    rank_samples = [sum(len(b.index) for b in batches[r * per_rank : (r + 1) * per_rank]) for r in range(num_actors)]
+    assert max(rank_samples) - min(rank_samples) <= 1
+    assert [i for b in batches for i in b.index] == list(range(num_samples))
+    if num_samples % (micro_batch_size * num_actors) == 0:
+        assert all(len(b.index) == micro_batch_size for b in batches)
