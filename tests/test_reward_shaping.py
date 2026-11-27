@@ -363,3 +363,33 @@ def test_reinforce_processing_preserves_masked_kl_and_policy_gradient(maker_modu
 
     torch.testing.assert_close(result.returns * result.action_mask, torch.tensor([[0.3, 0.0, 0.8]]))
     torch.testing.assert_close(log_probs.grad, torch.tensor([[0.125, 0.0, -0.125]]))
+
+
+@pytest.mark.parametrize(
+    "lengths, max_batch_tokens, num_batches",
+    [([3000] * 26, 6000, 16), ([3000] * 64, 6000, 32), ([5000] * 13, 10000, 8)],
+)
+def test_dynamic_rollout_split_keeps_batches_within_the_token_limit(
+    maker_module, monkeypatch, lengths, max_batch_tokens, num_batches
+):
+    path = Path(__file__).resolve().parents[1] / "openrlhf/utils/seqlen_balancing.py"
+    spec = importlib.util.spec_from_file_location("_seqlen_balancing_test", path)
+    balancing = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(balancing)
+    for name in ("ceildiv", "get_minimum_num_micro_batch_size", "get_seqlen_balanced_partitions"):
+        monkeypatch.setattr(maker_module, name, getattr(balancing, name))
+    maker = maker_module.RemoteExperienceMaker.__new__(maker_module.RemoteExperienceMaker)
+    maker.tokenizer = SimpleNamespace(pad_token_id=0)
+    maker.args = SimpleNamespace(
+        train=SimpleNamespace(dynamic_batch_enable=True),
+        actor=SimpleNamespace(num_nodes=1, num_gpus_per_node=8),
+        ds=SimpleNamespace(ring_attn_size=1, tensor_parallel_size=1),
+        rollout=SimpleNamespace(max_tokens_per_gpu=6000),
+    )
+    samples = [Experience(sequences=torch.tensor([[0]]), total_length=torch.tensor([n])) for n in lengths]
+
+    batches = maker.split_rollout_samples(samples)
+
+    assert len(batches) == num_batches
+    assert max(b.total_length.sum().item() for b in batches) <= max_batch_tokens
+    assert sorted(i for b in batches for i in b.index) == list(range(len(lengths)))

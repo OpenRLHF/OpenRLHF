@@ -64,8 +64,10 @@ class RemoteExperienceMaker:
                 self.args.ds.ring_attn_size,
                 self.args.ds.tensor_parallel_size,
             )
-            minimum_batch_num = minimum_batch_num // effective_actor_num * effective_actor_num
-            num_batch = max(minimum_batch_num, effective_actor_num)
+            # Round up to a multiple of the actor count: rounding down would pack more than
+            # max_tokens_per_gpu into each batch. Stay within one sample per batch.
+            num_batch = min(ceildiv(minimum_batch_num, effective_actor_num), len(total_lengths) // effective_actor_num)
+            num_batch = max(num_batch, 1) * effective_actor_num
             batch_indexes = get_seqlen_balanced_partitions(total_lengths, num_batch, False)
             for micro_index in batch_indexes:
                 micro_batch = [rollout_samples[idx] for idx in micro_index]
