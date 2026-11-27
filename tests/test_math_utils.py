@@ -9,8 +9,20 @@ math_utils = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(math_utils)
 
 
-@pytest.mark.parametrize("response", [r"so the answer is $\boxed{7}$.", r"so the answer is $\fbox{7}$."])
+@pytest.mark.parametrize(
+    "response",
+    [
+        r"so the answer is $\boxed{7}$.",
+        r"so the answer is $\fbox{7}$.",
+        r"Initially $\boxed{4}$, but the final answer is $\fbox{7}$.",
+        r"Initially $\fbox{4}$, but the final answer is $\boxed{7}$.",
+    ],
+)
 def test_extract_boxed_answer_accepts_boxed_and_fbox(response):
     answer = math_utils.extract_boxed_answer(response)
     assert answer == "7"
     assert math_utils.grade_answer(answer, "7")
+
+
+def test_extract_boxed_answer_does_not_fall_back_past_an_unclosed_final_fbox():
+    assert math_utils.extract_boxed_answer(r"Initially \boxed{4}, finally \fbox{7") is None
