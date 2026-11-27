@@ -163,6 +163,45 @@ def test_icepop_filters_overflowing_ratio_without_nan():
     assert log_probs.grad[0, 0] == 0
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+@pytest.mark.parametrize("gating,threshold", [("ratio", [0.5, 5.0]), ("binary_kl", [0.0, 20.0]), ("tv", [0.0, 1.0])])
+def test_sequence_mask_rejects_nonfinite_token_weights(dtype, gating, threshold):
+    # The first sequence passes the aggregate gate despite exp(1000) overflowing.
+    old_log_probs = torch.tensor([[0.0, -1000.0], [-1.0, -1.0]], dtype=dtype)
+    rollout_log_probs = torch.tensor([[-1000.0, 0.0], [-1.0, -1.0]], dtype=dtype)
+    log_probs = old_log_probs.clone().requires_grad_()
+    loss_fn = PolicyLoss(is_correction_level="seq", is_correction_gating=gating, is_correction_threshold=threshold)
+    loss, _, _, _, filtered = loss_fn(
+        log_probs,
+        old_log_probs,
+        torch.ones_like(log_probs),
+        action_mask=torch.ones_like(log_probs),
+        rollout_log_probs=rollout_log_probs,
+    )
+    loss.backward()
+
+    torch.testing.assert_close(loss, torch.tensor(-0.5, dtype=dtype))
+    torch.testing.assert_close(filtered, torch.tensor(0.5))
+    torch.testing.assert_close(log_probs.grad, torch.tensor([[0.0, 0.0], [-0.25, -0.25]], dtype=dtype))
+
+
+def test_sequence_mask_ignores_nonfinite_weights_in_padding():
+    old_log_probs = torch.tensor([[-1.0, 0.0]])
+    log_probs = old_log_probs.clone().requires_grad_()
+    loss, _, _, _, filtered = PolicyLoss(is_correction_level="seq")(
+        log_probs,
+        old_log_probs,
+        torch.ones_like(log_probs),
+        action_mask=torch.tensor([[1.0, 0.0]]),
+        rollout_log_probs=torch.tensor([[-1.0, -1000.0]]),
+    )
+    loss.backward()
+
+    torch.testing.assert_close(loss, torch.tensor(-1.0))
+    torch.testing.assert_close(filtered, torch.tensor(0.0))
+    torch.testing.assert_close(log_probs.grad, torch.tensor([[-1.0, 0.0]]))
+
+
 def test_grad_accum_global_norm_matches_global_token_mean_over_window():
     # Two micro-batches in one optimizer-step window (gas=2) with UNEVEN token counts.
     mb0 = torch.tensor([[1.0, 2.0, 0.0]])  # 2 tokens
