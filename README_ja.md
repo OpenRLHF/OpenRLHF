@@ -4,21 +4,21 @@
 <div align="center">
 <p align="center">
       <a href="https://github.com/OpenRLHF/OpenRLHF/graphs/contributors">
-        <img alt="GitHub Contributors" src="https://img.shields.io/github/contributors/OpenRLHF/OpenRLHF?cacheSeconds=86400" />
+        <img alt="GitHub Contributors" src="https://badgen.net/badge/GitHub/contributors/0088ff" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/issues">
-        <img alt="Issues" src="https://img.shields.io/github/issues/OpenRLHF/OpenRLHF?color=0088ff&cacheSeconds=86400" />
+        <img alt="Issues" src="https://badgen.net/github/open-issues/OpenRLHF/OpenRLHF?color=0088ff" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/discussions">
-        <img alt="Discussions" src="https://img.shields.io/github/discussions/OpenRLHF/OpenRLHF?color=0088ff&cacheSeconds=86400" />
+        <img alt="Discussions" src="https://badgen.net/badge/GitHub/discussions/0088ff" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/pulls">
-        <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/OpenRLHF/OpenRLHF?color=0088ff&cacheSeconds=86400" />
+        <img alt="GitHub pull requests" src="https://badgen.net/github/open-prs/OpenRLHF/OpenRLHF?color=0088ff&label=pull%20requests" />
       </a>
       <a href="https://github.com/OpenRLHF/OpenRLHF/stargazers">
-        <img alt="GitHub stars" src="https://img.shields.io/github/stars/OpenRLHF/OpenRLHF?color=ccf" />
+        <img alt="GitHub stars" src="https://badgen.net/github/stars/OpenRLHF/OpenRLHF?color=ccf" />
       </a>
-      <a href="https://deepwiki.com/OpenRLHF/OpenRLHF"><img alt="Ask DeepWiki" src="https://img.shields.io/badge/Ask-DeepWiki-0088ff" /></a>
+      <a href="https://deepwiki.com/OpenRLHF/OpenRLHF"><img alt="Ask DeepWiki" src="https://badgen.net/badge/Ask/DeepWiki/0088ff" /></a>
       <br>
       <em>オープンソース / 包括的 / 軽量 / 使いやすい</em>
     </p>
