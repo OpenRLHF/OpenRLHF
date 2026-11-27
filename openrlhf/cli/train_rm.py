@@ -1,5 +1,4 @@
 import argparse
-import math
 import os
 from datetime import datetime
 
@@ -100,7 +99,8 @@ def train(args):
 
     # scheduler
     num_update_steps_per_epoch = len(train_dataset) // args.train.batch_size
-    max_steps = math.ceil(args.train.max_epochs * num_update_steps_per_epoch)
+    # Accumulation carries across epochs, so count complete windows over the whole run.
+    max_steps = len(train_dataloader) * args.train.max_epochs // strategy.accumulated_gradient
 
     # gradient_checkpointing
     if args.model.gradient_checkpointing_enable:
