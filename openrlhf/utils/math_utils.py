@@ -225,6 +225,8 @@ def _normalize(expr: str | None) -> str | None:
             expr = _parse_latex(expr)
         except Exception:
             pass
+    # Model answers may contain these symbols directly, without LaTeX commands.
+    expr = expr.replace("−", "-").replace("π", "pi").replace("×", "*").replace("·", "*")
     expr = re.sub(r"- *", "-", expr)
     expr = _inject_implicit_mixed_number(expr)
     expr = expr.replace(" ", "")
