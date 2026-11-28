@@ -46,6 +46,25 @@ get_loss_batch_info = _loss_utils_module.get_loss_batch_info
 iter_grad_accum_global_norm = _loss_utils_module.iter_grad_accum_global_norm
 
 
+@pytest.mark.parametrize("margin", [None, [0.0, 0.0, 0.0], [0.5, 1.0, 2.0]])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_logexp_reward_loss_honors_margin_and_gradients(margin, dtype):
+    chosen = torch.tensor([1.0, 0.5, -1.0], dtype=dtype, requires_grad=True)
+    rejected = torch.tensor([0.5, 1.0, 0.0], dtype=dtype, requires_grad=True)
+    margin = None if margin is None else torch.tensor(margin, dtype=dtype)
+    reference_chosen = chosen.detach().clone().requires_grad_()
+    reference_rejected = rejected.detach().clone().requires_grad_()
+
+    loss = _loss_module.LogExpLoss()(chosen, rejected, margin)
+    reference = _loss_module.PairWiseLoss()(reference_chosen, reference_rejected, margin)
+    loss.backward()
+    reference.backward()
+
+    torch.testing.assert_close(loss, reference)
+    torch.testing.assert_close(chosen.grad, reference_chosen.grad)
+    torch.testing.assert_close(rejected.grad, reference_rejected.grad)
+
+
 def test_token_mean_aggregation_matches_verl_dp_average():
     loss = torch.tensor([[1.0, 2.0, 0.0], [3.0, 4.0, 5.0], [7.0, 0.0, 0.0]])
     mask = torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 0.0]])
