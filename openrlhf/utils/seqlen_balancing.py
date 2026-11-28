@@ -150,7 +150,9 @@ def greedy_partition(seqlen_list: List[int], k_partitions: int, equal_size: bool
     return partitions
 
 
-def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, equal_size: bool):
+def get_seqlen_balanced_partitions(
+    seqlen_list: List[int], k_partitions: int, equal_size: bool, max_partition_sum: int | None = None
+):
     """get order of seq lengths to make partitions balanced, this is
         used in balacing sum of seqlength across dp ranks and microbatches
     Parameters:
@@ -162,6 +164,9 @@ def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, eq
             if True, number of items in each partitions must be equal.
             if False, only consider balancing the sum, each partition can have
             variable number of items
+        max_partition_sum (int, optional):
+            Token limit for variable-size microbatches. The partition count must
+            accommodate the first-fit packing used to determine microbatch counts.
     Returns:
         partitions (List[List[int]]):
             return k_partitions list containing the index of items.
@@ -181,6 +186,29 @@ def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, eq
         return sorted_partitions
 
     partitions = karmarkar_karp(seqlen_list=seqlen_list, k_partitions=k_partitions, equal_size=equal_size)
+    if max_partition_sum is not None:
+        assert not equal_size, "a token limit requires variable-size partitions"
+        if any(sum(seqlen_list[idx] for idx in partition) > max_partition_sum for partition in partitions):
+            # Balancing can exceed the capacity even when first fit found a valid
+            # packing. Recover that packing without changing the synchronized count.
+            partitions = []
+            partition_sums = []
+            for idx, length in enumerate(seqlen_list):
+                if length > max_partition_sum:
+                    raise ValueError(f"Sequence length {length} exceeds token limit {max_partition_sum}")
+                for i, total in enumerate(partition_sums):
+                    if total + length <= max_partition_sum:
+                        partitions[i].append(idx)
+                        partition_sums[i] += length
+                        break
+                else:
+                    partitions.append([idx])
+                    partition_sums.append(length)
+            if len(partitions) > k_partitions:
+                raise ValueError(f"Token limit requires {len(partitions)} partitions, got {k_partitions}")
+            while len(partitions) < k_partitions:
+                partition = max(partitions, key=len)
+                partitions.append([partition.pop()])
     return _check_and_sort_partitions(partitions)
 
 
