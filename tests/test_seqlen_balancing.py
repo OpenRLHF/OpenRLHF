@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 spec = importlib.util.spec_from_file_location(
     "_openrlhf_seqlen_balancing_test",
     Path(__file__).resolve().parents[1] / "openrlhf" / "utils" / "seqlen_balancing.py",
