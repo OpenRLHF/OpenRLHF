@@ -136,7 +136,14 @@ class NaiveReplayBuffer(ABC):
         for i, num_mbs in enumerate(num_microbatches):
             start, end = i * local_train_batch_size, (i + 1) * local_train_batch_size
             samples = sample_lengths[start:end]
-            partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)  # List[List[int]], index
+            partitions = get_seqlen_balanced_partitions(
+                samples,
+                num_mbs,
+                equal_size=False,
+                max_partition_sum=args.train.max_tokens_per_gpu
+                * args.ds.ring_attn_size
+                * args.ds.tensor_parallel_size,
+            )
             for j in range(num_mbs):
                 for k in range(len(partitions[j])):
                     partitions[j][k] += start
