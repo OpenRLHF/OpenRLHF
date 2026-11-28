@@ -322,7 +322,10 @@ class LogExpLoss(nn.Module):
     def forward(
         self, chosen_reward: torch.Tensor, reject_reward: torch.Tensor, margin: torch.Tensor = None
     ) -> torch.Tensor:
-        loss = torch.log(1 + torch.exp(reject_reward - chosen_reward)).mean()
+        reward_gap = reject_reward - chosen_reward
+        if margin is not None:
+            reward_gap = reward_gap + margin
+        loss = torch.log(1 + torch.exp(reward_gap)).mean()
         return loss
 
 
