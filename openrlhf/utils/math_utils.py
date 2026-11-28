@@ -145,7 +145,23 @@ def _parse_latex(expr: str) -> str:
     expr = expr.replace("\\tfrac", "\\frac")
     expr = expr.replace("\\dfrac", "\\frac")
     expr = expr.replace("\\frac", " \\frac")
-    expr = latex2text.LatexNodes2Text().latex_to_text(expr)
+    # pylatexenc's default sqrt conversion discards the optional root index.
+    context = latex2text.get_default_latex_context_db()
+    context.add_context_category(
+        "math-roots",
+        macros=[
+            latex2text.MacroTextSpec(
+                "sqrt",
+                simplify_repl=lambda node, l2tobj: "((%s)**(1/(%s)))"
+                % (
+                    l2tobj.node_to_text(node.nodeargd.argnlist[1]),
+                    l2tobj.node_to_text(node.nodeargd.argnlist[0]) or "2",
+                ),
+            )
+        ],
+        prepend=True,
+    )
+    expr = latex2text.LatexNodes2Text(latex_context=context).latex_to_text(expr)
     expr = expr.replace("√", "sqrt")
     expr = expr.replace("π", "pi")
     expr = expr.replace("∞", "inf")
